@@ -1,0 +1,66 @@
+services:
+  # Vector Database Service
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: always
+    ports:
+      - "${QDRANT_REST_PORT:-6333}:6333"  # REST API & Dashboard
+      - "${QDRANT_GRPC_PORT:-6334}:6334"  # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - rag-network
+
+  # Application Interface Service
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    environment:
+      - PORT=8080
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-your-secret-key-change-in-production}
+      # Vector DB Configuration
+      - VECTOR_DB=qdrant
+      - QDRANT_URI=http://qdrant:6333
+      # RAG Configuration
+      - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-}
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-}
+      # LLM Configuration (configure based on your setup)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-}
+    volumes:
+      - open_webui_data:/app/backend/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - rag-network
+
+volumes:
+  qdrant_data:
+    driver: local
+  open_webui_data:
+    driver: local
+
+networks:
+  rag-network:
+    driver: bridge
