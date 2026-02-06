@@ -1,7 +1,7 @@
 .mcp.json
 goal.md
 .claude
-.env*
+.env
 
 # Rust
 debug
