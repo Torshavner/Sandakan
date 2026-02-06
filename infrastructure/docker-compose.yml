@@ -42,8 +42,8 @@ services:
       - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-}
       # LLM Configuration (configure based on your setup)
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-placeholder}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://host.docker.internal:8080/v1}
     volumes:
       - open_webui_data:/app/backend/data
     healthcheck:
@@ -52,6 +52,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - rag-network
 

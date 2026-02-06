@@ -2,3 +2,10 @@
 goal.md
 .claude
 .env*
+
+# Rust
+debug
+target
+**/*.rs.bk
+**/mutants.out*/
+
