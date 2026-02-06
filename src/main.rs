@@ -39,7 +39,13 @@ async fn main() -> anyhow::Result<()> {
         "text-embedding-3-small".to_string(),
         "gpt-4o-mini".to_string(),
     ));
-    let vector_store = Arc::new(QdrantAdapter::new("rag_chunks".to_string()));
+    let qdrant_url =
+        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let vector_store = Arc::new(
+        QdrantAdapter::new(&qdrant_url, "rag_chunks".to_string())
+            .await
+            .expect("Failed to connect to Qdrant"),
+    );
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
