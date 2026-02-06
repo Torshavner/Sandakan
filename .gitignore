@@ -1,4 +1,11 @@
 .mcp.json
 goal.md
 .claude
-.env*
+.env
+
+# Rust
+debug
+target
+**/*.rs.bk
+**/mutants.out*/
+

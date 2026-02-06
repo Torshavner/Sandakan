@@ -95,10 +95,20 @@ Code conveys intent via signatures and structure.
 
 ### Standards
 
-* **Unit:** Colocated `#[cfg(test)] mod tests`.
-* **Integration:** `tests/` directory.
+* **Location:** All tests in `tests/` directory, mirroring `src/` structure.
+* **Naming:** `given_<context>_when_<action>_then_<expectation>` format.
 * **Tooling:** `cargo clippy`, `cargo fmt`.
 * **Deps:** Workspace-level versioning.
+
+### Test Naming Examples
+
+```rust
+#[test]
+fn given_valid_mime_when_parsing_pdf_then_returns_pdf_content_type() { }
+
+#[test]
+fn given_two_chunk_ids_when_generated_then_are_unique() { }
+```
 
 ---
 

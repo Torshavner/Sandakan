@@ -4,9 +4,10 @@
 
 Code conveys intent via type signatures, function naming, and module organization.
 
-* Document public APIs: `///`.
-* Document non-obvious logic: `// ...`.
-* Document safety: `// SAFETY: ...`.
+* **Minimal Comments:** Code should be self-documenting. Avoid redundant comments.
+* **Public APIs:** `///` only when purpose is non-obvious from name/signature.
+* **Non-obvious Logic:** `// ...` only for *why*, never *what*.
+* **Safety:** `// SAFETY:` invariants required for `unsafe` blocks.
 
 ---
 
