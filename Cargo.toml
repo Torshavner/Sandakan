@@ -37,3 +37,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 mockall = "0.13"
 axum-test = "16"
+testcontainers = "0.24"
