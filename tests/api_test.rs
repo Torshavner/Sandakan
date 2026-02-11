@@ -8,8 +8,8 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use sandakan::application::ports::{
-    FileLoader, FileLoaderError, LlmClient, LlmClientError, SearchResult, VectorStore,
-    VectorStoreError,
+    CollectionConfig, FileLoader, FileLoaderError, LlmClient, LlmClientError, SearchResult,
+    VectorStore, VectorStoreError,
 };
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::{Chunk, ChunkId, Document, DocumentId, Embedding};
@@ -49,6 +49,21 @@ struct MockVectorStore;
 
 #[async_trait::async_trait]
 impl VectorStore for MockVectorStore {
+    async fn create_collection(
+        &self,
+        _config: &CollectionConfig,
+    ) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+
     async fn upsert(
         &self,
         _chunks: &[Chunk],

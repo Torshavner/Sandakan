@@ -1,1 +1,0 @@
-Read and adopt the role defined in ai/agents/developer/CLAUDE.md. Follow all instructions in that file for this entire session. Confirm the role and remind the user to switch to the correct model if needed.
