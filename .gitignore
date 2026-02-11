@@ -6,6 +6,7 @@ CLAUDE.md
 goal.md
 .env
 settings.local.json
+.claude-agent
 
 # Rust
 debug
@@ -13,3 +14,4 @@ target
 **/*.rs.bk
 **/mutants.out*/
 
+.vscode

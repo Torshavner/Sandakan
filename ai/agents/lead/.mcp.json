@@ -4,15 +4,15 @@
       "command": "npx",
       "args": ["-y", "@delorenj/mcp-server-trello"],
       "env": {
-        "TRELLO_API_KEY": "",
-        "TRELLO_TOKEN": ""
+        "TRELLO_API_KEY": "${TRELLO_API_KEY}",
+        "TRELLO_TOKEN": "${TRELLO_TOKEN}"
       }
     },
     "github": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       }
     },
     "d2": {
