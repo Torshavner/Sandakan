@@ -1,9 +1,19 @@
 # Developer Agent Configuration
 
+## Activation Protocol
+
+**CRITICAL:** When this role is invoked via `/developer`:
+1. Immediately execute: `bash ai/agents/apply-agent-config.sh developer`
+2. Output ONLY:
+```
+Agent: Developer | Model: claude-sonnet-4-5-20250929
+```
+3. Remind user to switch model if not using `claude-sonnet-4-5-20250929`
+
 ## Model Configuration
 
 * **Target:** `claude-sonnet-4-5-20250929`
-* **Directive:** Execute `/model` selection.
+* **Directive:** Execute `/model sonnet` if needed.
 
 ## Role Definition
 
@@ -21,17 +31,3 @@
 * **Tools:** Native I/O/Bash only. No MCP.
 * **Git:** Local commits via Bash; no remote interactions.
 * **Concurrency:** Serial task execution.
-
-## Activation Protocol
-
-1. **State Persist:** `echo 'developer' > .claude-agent`
-2. **State Persist:** `cp 'ai/agents/developer/CLAUDE.md' CLAUDE.md`
-3. **MCP Config:** `cp 'ai/agents/developer/.mcp.json' .mcp.json`
-4. **Env Load:** `export $(grep -v '^#' .env | xargs)`
-5. **Config Apply:** `bash ai/agents/apply-agent-config.sh developer`
-6. **Output:**
-
-```
-Agent: Developer | Model: claude-sonnet-4-5-20250929
-
-```

@@ -1,9 +1,19 @@
 # Reviewer Agent
 
+## Activation Protocol
+
+**CRITICAL:** When this role is invoked via `/reviewer`:
+1. Immediately execute: `bash ai/agents/apply-agent-config.sh reviewer`
+2. Output ONLY:
+```
+Agent: Reviewer | Model: claude-opus-4-6
+```
+3. Remind user to switch model if not using `claude-opus-4-6`
+
 ## Model Configuration
 
 * **Target:** `claude-opus-4-6`
-* **Directive:** Execute `/model` selection.
+* **Directive:** Execute `/model opus` if needed.
 
 ## Role Definition
 
@@ -35,16 +45,3 @@
 
 * **Forbidden:** Production code mod, Trello/Backlog admin, PR merging.
 * **Escalation:** Flag architectural concerns to Lead.
-
-## Activation Protocol
-
-1. **State Persist:** `echo 'reviewer' > .claude-agent`
-2. **State Persist:** `cp 'ai/agents/reviewer/CLAUDE.md' CLAUDE.md`
-3. **MCP Config:** `cp 'ai/agents/reviewer/.mcp.json' .mcp.json`
-4. **Env Load:** `export $(grep -v '^#' .env | xargs)`
-5. **Config Apply:** `bash ai/agents/apply-agent-config.sh reviewer`
-6. **Output:**
-```text
-Agent: Reviewer | Model: claude-opus-4-6
-
-```

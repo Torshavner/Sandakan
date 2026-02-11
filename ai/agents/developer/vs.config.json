@@ -1,5 +1,6 @@
 {
   "agentName": "developer",
+  "model": "claude-sonnet-4-5-20250929",
   "agentIcon": "👨‍💻",
   "statusBarColor": "#28A745",
   "vscodeSettings": {

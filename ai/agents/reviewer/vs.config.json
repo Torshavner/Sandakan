@@ -1,5 +1,6 @@
 {
   "agentName": "reviewer",
+  "model": "claude-opus-4-6",
   "agentIcon": "🔍",
   "statusBarColor": "#FFC107",
   "vscodeSettings": {
