@@ -10,6 +10,7 @@ use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::infrastructure::llm::OpenAiClient;
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::QdrantAdapter;
+use sandakan::infrastructure::text_processing::TextSplitterFactory;
 use sandakan::presentation::{AppState, Environment, ScaffoldConfig, Settings, create_router};
 
 struct StubFileLoader;
@@ -69,12 +70,17 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to Qdrant"),
     );
 
+    let text_splitter = TextSplitterFactory::create(
+        settings.embeddings.strategy,
+        settings.chunking.max_chunk_size,
+        settings.chunking.overlap_tokens,
+    );
+
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        settings.chunking.max_chunk_size,
-        settings.chunking.overlap_tokens,
+        text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(

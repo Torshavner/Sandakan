@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures::stream;
 
-use crate::application::ports::{FileLoader, LlmClient, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::infrastructure::observability::sanitize_prompt;
 use crate::presentation::state::AppState;
 
@@ -13,14 +13,15 @@ use super::chat::{ChatError, ErrorResponse};
 use super::openai_types::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse};
 
 #[tracing::instrument(skip(state, request), fields(model = %request.model, scaffold = true))]
-pub async fn scaffold_chat_handler<F, L, V>(
-    State(state): State<AppState<F, L, V>>,
+pub async fn scaffold_chat_handler<F, L, V, T>(
+    State(state): State<AppState<F, L, V, T>>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Response
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
+    T: TextSplitter + 'static + ?Sized,
 {
     let user_message = request
         .messages

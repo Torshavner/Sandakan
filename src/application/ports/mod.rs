@@ -5,6 +5,7 @@ mod llm_client;
 mod payload_field_type;
 mod payload_index;
 mod search_result;
+mod text_splitter;
 mod vector_store;
 mod vector_store_error;
 
@@ -15,5 +16,6 @@ pub use llm_client::{LlmClient, LlmClientError};
 pub use payload_field_type::PayloadFieldType;
 pub use payload_index::PayloadIndex;
 pub use search_result::SearchResult;
+pub use text_splitter::{TextSplitter, TextSplitterError};
 pub use vector_store::VectorStore;
 pub use vector_store_error::VectorStoreError;

@@ -105,7 +105,10 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
 
     test_qdrant
         .adapter
-        .upsert(std::slice::from_ref(&chunk), std::slice::from_ref(&embedding))
+        .upsert(
+            std::slice::from_ref(&chunk),
+            std::slice::from_ref(&embedding),
+        )
         .await
         .expect("Failed to upsert chunk");
 
