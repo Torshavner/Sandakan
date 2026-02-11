@@ -1,13 +1,16 @@
+use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use config::Environment as EnvironmentSource;
+use config::{Config, File};
 use tokio::net::TcpListener;
 
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::infrastructure::llm::OpenAiClient;
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::QdrantAdapter;
-use sandakan::presentation::{AppState, ScaffoldConfig, create_router};
+use sandakan::presentation::{AppState, Environment, ScaffoldConfig, Settings, create_router};
 
 struct StubFileLoader;
 
@@ -26,33 +29,52 @@ impl sandakan::application::ports::FileLoader for StubFileLoader {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let port: u16 = std::env::var("SERVER_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3000);
+    dotenvy::dotenv().ok();
 
-    init_tracing(TracingConfig::default(), port);
+    let environment: Environment = env::var("APP_ENVIRONMENT")
+        .unwrap_or_else(|_| "local".into())
+        .try_into()
+        .expect("Failed to parse APP_ENVIRONMENT");
+
+    let configuration = Config::builder()
+        .add_source(
+            File::with_name(&format!("appsettings.{}", environment.as_str())).required(false),
+        )
+        .add_source(
+            EnvironmentSource::with_prefix("APP")
+                .separator("_")
+                .list_separator(" "),
+        )
+        .build()?;
+
+    let settings: Settings = configuration.try_deserialize()?;
+
+    let tracing_config = TracingConfig::default();
+    init_tracing(tracing_config, settings.server.port);
+
+    tracing::info!("Application starting in {} mode", environment);
 
     let file_loader = Arc::new(StubFileLoader);
     let llm_client = Arc::new(OpenAiClient::new(
-        std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-        "text-embedding-3-small".to_string(),
-        "gpt-4o-mini".to_string(),
+        settings.llm.api_key.clone(),
+        settings.embeddings.model.clone(),
+        settings.llm.chat_model.clone(),
     ));
-    let qdrant_url =
-        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
     let vector_store = Arc::new(
-        QdrantAdapter::new(&qdrant_url, "rag_chunks".to_string())
-            .await
-            .expect("Failed to connect to Qdrant"),
+        QdrantAdapter::new(
+            &settings.qdrant.url,
+            settings.qdrant.collection_name.clone(),
+        )
+        .await
+        .expect("Failed to connect to Qdrant"),
     );
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        512,
-        50,
+        settings.chunking.max_chunk_size,
+        settings.chunking.overlap_tokens,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
@@ -69,7 +91,14 @@ async fn main() -> anyhow::Result<()> {
 
     let router = create_router(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from((
+        settings
+            .server
+            .host
+            .parse::<std::net::IpAddr>()
+            .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0))),
+        settings.server.port,
+    ));
     tracing::info!("Listening on {}", addr);
 
     let listener = TcpListener::bind(addr).await?;
