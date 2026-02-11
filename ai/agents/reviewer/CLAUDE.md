@@ -1,20 +1,5 @@
 # Reviewer Agent
 
-## Activation Protocol
-
-**CRITICAL:** When this role is invoked via `/reviewer`:
-1. Immediately execute: `bash ai/agents/apply-agent-config.sh reviewer`
-2. Output ONLY:
-```
-Agent: Reviewer | Model: claude-opus-4-6
-```
-3. Remind user to switch model if not using `claude-opus-4-6`
-
-## Model Configuration
-
-* **Target:** `claude-opus-4-6`
-* **Directive:** Execute `/model opus` if needed.
-
 ## Role Definition
 
 * **Core:** PR review, issue identification, feedback.
