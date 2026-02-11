@@ -1,0 +1,18 @@
+{
+  "agentName": "reviewer",
+  "model": "claude-opus-4-6",
+  "agentIcon": "🔍",
+  "statusBarColor": "#FFC107",
+  "vscodeSettings": {
+    "workbench.colorCustomizations": {
+      "statusBar.background": "#FFC107",
+      "statusBar.foreground": "#000000",
+      "statusBar.noFolderBackground": "#FFC107",
+      "statusBar.debuggingBackground": "#FFC107",
+      "titleBar.activeBackground": "#FFB300",
+      "titleBar.activeForeground": "#000000",
+      "titleBar.inactiveBackground": "#FFA000",
+      "titleBar.inactiveForeground": "#333333"
+    }
+  }
+}
