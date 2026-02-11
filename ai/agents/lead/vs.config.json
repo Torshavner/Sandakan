@@ -1,0 +1,18 @@
+{
+  "agentName": "lead",
+  "model": "claude-opus-4-6",
+  "agentIcon": "🎯",
+  "statusBarColor": "#00CED1",
+  "vscodeSettings": {
+    "workbench.colorCustomizations": {
+      "statusBar.background": "#00CED1",
+      "statusBar.foreground": "#000000",
+      "statusBar.noFolderBackground": "#00CED1",
+      "statusBar.debuggingBackground": "#00CED1",
+      "titleBar.activeBackground": "#00B8BA",
+      "titleBar.activeForeground": "#FFFFFF",
+      "titleBar.inactiveBackground": "#00A0A3",
+      "titleBar.inactiveForeground": "#CCCCCC"
+    }
+  }
+}

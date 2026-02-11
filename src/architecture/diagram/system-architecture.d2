@@ -1,0 +1,166 @@
+title: Rust RAG Pipeline - System Architecture {
+  near: top-center
+  shape: text
+  style.font-size: 20
+  style.bold: true
+}
+
+direction: right
+
+# Layer 4: Presentation
+presentation: Presentation Layer {
+  style.fill: "#e3f2fd"
+
+  api: REST API\n(Axum) {
+    shape: hexagon
+  }
+
+  cli: CLI Interface {
+    shape: hexagon
+  }
+
+  main: main.rs\n(Composition Root) {
+    shape: rectangle
+  }
+}
+
+# Layer 3: Infrastructure
+infrastructure: Infrastructure Layer {
+  style.fill: "#fff3e0"
+
+  qdrant: Qdrant Adapter\n(gRPC) {
+    shape: cylinder
+  }
+
+  openai: OpenAI Client\n(Embeddings & Chat) {
+    shape: cloud
+  }
+
+  pdf: PDF Extractor {
+    shape: document
+  }
+
+  whisper: Whisper\n(Audio Transcription) {
+    shape: document
+  }
+}
+
+# Layer 2: Application
+application: Application Layer {
+  style.fill: "#f3e5f5"
+
+  ports: Ports (Traits) {
+    style.fill: "#e1bee7"
+
+    fileLoader: FileLoader {
+      shape: diamond
+    }
+
+    vectorStore: VectorStore {
+      shape: diamond
+    }
+
+    llmClient: LlmClient {
+      shape: diamond
+    }
+  }
+
+  services: Services {
+    style.fill: "#e1bee7"
+
+    ingestion: IngestionService\n(File → Vectors) {
+      shape: rectangle
+    }
+
+    retrieval: RetrievalService\n(Query → Answer) {
+      shape: rectangle
+    }
+  }
+}
+
+# Layer 1: Domain
+domain: Domain Layer {
+  style.fill: "#e8f5e9"
+
+  entities: Entities {
+    style.fill: "#c8e6c9"
+
+    chunk: Chunk\n(text, metadata, page) {
+      shape: oval
+    }
+
+    document: Document {
+      shape: oval
+    }
+  }
+}
+
+# External Systems
+external: External Systems {
+  style.fill: "#ffebee"
+
+  qdrantDB: Qdrant\n(Vector Database) {
+    shape: cylinder
+    style.stroke: "#d32f2f"
+  }
+
+  openaiAPI: OpenAI API {
+    shape: cloud
+    style.stroke: "#d32f2f"
+  }
+}
+
+# Connections - Presentation to Infrastructure
+presentation.api -> infrastructure.qdrant
+presentation.api -> infrastructure.openai
+presentation.cli -> infrastructure.pdf
+presentation.cli -> infrastructure.whisper
+
+# Connections - Infrastructure to Application Ports
+infrastructure.qdrant -> application.ports.vectorStore: implements
+infrastructure.openai -> application.ports.llmClient: implements
+infrastructure.pdf -> application.ports.fileLoader: implements
+infrastructure.whisper -> application.ports.fileLoader: implements
+
+# Connections - Application Services to Ports
+application.services.ingestion -> application.ports.fileLoader: uses
+application.services.ingestion -> application.ports.vectorStore: uses
+application.services.ingestion -> application.ports.llmClient: uses
+
+application.services.retrieval -> application.ports.vectorStore: uses
+application.services.retrieval -> application.ports.llmClient: uses
+
+# Connections - Services to Domain
+application.services.ingestion -> domain.entities.chunk: creates
+application.services.retrieval -> domain.entities.chunk: reads
+
+# Connections - Infrastructure to External Systems
+infrastructure.qdrant -> external.qdrantDB: gRPC
+infrastructure.openai -> external.openaiAPI: HTTP
+
+# Data Flow Annotations (simplified for compactness)
+flows: Data Flows {
+  near: bottom-left
+  style.fill: "#fffef7"
+
+  ingestion: Ingestion:\nUpload → Extract → Chunk → Embed → Store {
+    shape: text
+    style.font-size: 12
+  }
+
+  retrieval: Retrieval:\nQuery → Embed → Search → Augment → Generate {
+    shape: text
+    style.font-size: 12
+  }
+}
+
+# Technology Stack
+techStack: Tech Stack {
+  near: bottom-right
+  style.fill: "#fafafa"
+
+  stack: "tokio • Qdrant • serde • tracing • candle" {
+    shape: text
+    style.font-size: 11
+  }
+}

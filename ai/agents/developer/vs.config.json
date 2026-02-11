@@ -1,0 +1,18 @@
+{
+  "agentName": "developer",
+  "model": "claude-sonnet-4-5-20250929",
+  "agentIcon": "👨‍💻",
+  "statusBarColor": "#28A745",
+  "vscodeSettings": {
+    "workbench.colorCustomizations": {
+      "statusBar.background": "#28A745",
+      "statusBar.foreground": "#FFFFFF",
+      "statusBar.noFolderBackground": "#28A745",
+      "statusBar.debuggingBackground": "#28A745",
+      "titleBar.activeBackground": "#218838",
+      "titleBar.activeForeground": "#FFFFFF",
+      "titleBar.inactiveBackground": "#1E7E34",
+      "titleBar.inactiveForeground": "#CCCCCC"
+    }
+  }
+}

@@ -57,6 +57,19 @@ services:
     networks:
       - rag-network
 
+  # Diagram Generation Service
+  d2-mcp:
+    image: ghcr.io/h0rv/d2-mcp:main
+    container_name: d2-mcp
+    restart: always
+    ports:
+      - "${D2_MCP_PORT:-8081}:8080"
+    volumes:
+      - ../src/architecture:/data
+    command: ["--transport", "http", "--image-type", "svg"]
+    networks:
+      - rag-network
+
 volumes:
   qdrant_data:
     driver: local
