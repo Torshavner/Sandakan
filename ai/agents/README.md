@@ -28,8 +28,15 @@ Execute via Skill tool trigger or manual bash command:
 
 ### Activation Workflow
 
-1. Run configuration script.
-2. Trigger VSCode Reload: `CMD+Shift+P` -> `Developer: Reload Window`.
+1. Run: `bash ai/agents/apply-agent-config.sh <agent-name>`
+2. Reload VSCode: `CMD+Shift+P` → `Developer: Reload Window`
+3. Restart Claude Code session (for MCP configuration changes)
+
+The script automatically:
+- Updates VSCode theme (status bar, title bar)
+- Copies agent-specific `.mcp.json` to project root
+- Copies agent-specific `CLAUDE.md` to project root
+- Saves agent state to `.claude-agent` file
 
 ### Status Line Metadata
 

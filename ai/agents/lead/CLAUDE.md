@@ -25,14 +25,12 @@
 
 ## Activation Protocol
 
-1. **State Persist:** `echo 'lead' > .claude-agent`
-2. **State Persist:** `cp 'ai/agents/lead/CLAUDE.md' CLAUDE.md`
-3. **MCP Config:** `cp 'ai/agents/lead/.mcp.json' .mcp.json`
-4. **Env Load:** `export $(grep -v '^#' .env | xargs)`
-5. **Config Apply:** `bash ai/agents/apply-agent-config.sh lead`
-6. **Output:**
+1. **Execute:** `bash ai/agents/apply-agent-config.sh lead`
+2. **Reload:** VSCode window (CMD+Shift+P → Developer: Reload Window)
+3. **Restart:** Claude Code session (for MCP changes)
 
-```
-Agent: Lead | Model: claude-opus-4-6 (switch with /model if needed)
-
-```
+Script automatically:
+- Copies `.mcp.json` (Trello, GitHub, D2 servers)
+- Copies `CLAUDE.md` (role instructions)
+- Updates VSCode theme (cyan status bar)
+- Saves agent state to `.claude-agent`
