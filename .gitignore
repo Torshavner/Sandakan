@@ -1,7 +1,11 @@
 .mcp.json
+CLAUDE.md
+!ai/agents/**/.mcp.json
+!ai/agents/**/CLAUDE.md
+
 goal.md
-.claude
 .env
+settings.local.json
 
 # Rust
 debug
