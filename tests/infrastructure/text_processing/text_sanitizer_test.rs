@@ -86,3 +86,32 @@ fn given_windows_style_crlf_newlines_when_sanitizing_then_merges_word() {
     let result = sanitize_extracted_text(input);
     assert_eq!(result, "The operating system is ready.");
 }
+
+#[test]
+fn given_soft_wrapped_lines_when_sanitizing_then_preserves_single_newlines() {
+    let input = "This is line one\nThis is line two";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "This is line one\nThis is line two");
+}
+
+#[test]
+fn given_messy_blank_lines_with_tabs_when_sanitizing_then_normalizes_to_clean_paragraph_break() {
+    let input = "Paragraph One\n  \t  \nParagraph Two";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "Paragraph One\n\nParagraph Two");
+}
+
+#[test]
+fn given_unicode_characters_split_by_hyphen_when_sanitizing_then_merges_correctly() {
+    let input = "Thank you for your coöper- \n ation.";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "Thank you for your coöperation.");
+}
+
+#[test]
+fn given_math_equation_minus_sign_at_end_of_line_when_sanitizing_then_preserves_space() {
+    let input = "The formula is x - \n y";
+    let result = sanitize_extracted_text(input);
+
+    assert_eq!(result, "The formula is x -\ny");
+}
