@@ -17,4 +17,6 @@ pub enum FileLoaderError {
     UnsupportedContentType(String),
     #[error("extraction failed: {0}")]
     ExtractionFailed(String),
+    #[error("no extractable text found in document: {0}")]
+    NoTextFound(String),
 }

@@ -8,7 +8,7 @@ pub struct Document {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContentType {
     Pdf,
     Audio,
