@@ -100,3 +100,22 @@ async fn given_empty_batch_when_embedding_then_returns_empty_vec() {
 
     assert!(embeddings.is_empty());
 }
+
+#[tokio::test]
+async fn given_text_exceeding_512_tokens_when_embedding_then_truncates_and_succeeds() {
+    let embedder = LocalCandleEmbedder::new("sentence-transformers/all-MiniLM-L6-v2")
+        .expect("Failed to load model");
+
+    let long_text = "word ".repeat(600);
+
+    let embedding = embedder
+        .embed(&long_text)
+        .await
+        .expect("Failed to embed long text");
+
+    assert_eq!(embedding.dimensions(), 384);
+    assert!(
+        embedding.values.iter().any(|&v| v != 0.0),
+        "Embedding should contain non-zero values"
+    );
+}

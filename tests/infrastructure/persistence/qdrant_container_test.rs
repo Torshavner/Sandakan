@@ -99,6 +99,12 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
     for (i, value) in embedding_values.iter_mut().enumerate().take(10) {
         *value = (i as f32) / 10.0;
     }
+    let length: f32 = embedding_values.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if length > 0.0 {
+        for value in &mut embedding_values {
+            *value /= length;
+        }
+    }
     let embedding = Embedding {
         values: embedding_values,
     };
