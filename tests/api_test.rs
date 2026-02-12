@@ -15,6 +15,10 @@ use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::{Chunk, ChunkId, Document, DocumentId, Embedding};
 use sandakan::presentation::{AppState, ScaffoldConfig, create_router};
 
+const TEST_CHUNK_SIZE: usize = 512;
+const TEST_CHUNK_OVERLAP: usize = 50;
+const TEST_TOP_K: usize = 5;
+
 struct MockFileLoader;
 
 #[async_trait::async_trait]
@@ -89,22 +93,27 @@ impl VectorStore for MockVectorStore {
 }
 
 fn create_test_app() -> axum::Router {
+    use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
+
     let file_loader = Arc::new(MockFileLoader);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
+    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        512,
-        50,
+        text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        5,
+        TEST_TOP_K,
     ));
 
     let state = AppState {
@@ -120,22 +129,27 @@ fn create_test_app() -> axum::Router {
 }
 
 fn create_scaffold_app() -> axum::Router {
+    use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
+
     let file_loader = Arc::new(MockFileLoader);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
+    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        512,
-        50,
+        text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        5,
+        TEST_TOP_K,
     ));
 
     let state = AppState {

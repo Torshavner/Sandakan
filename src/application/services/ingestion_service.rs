@@ -1,42 +1,42 @@
 use std::sync::Arc;
 
 use crate::application::ports::{
-    FileLoader, FileLoaderError, LlmClient, LlmClientError, VectorStore, VectorStoreError,
+    FileLoader, FileLoaderError, LlmClient, LlmClientError, TextSplitter, TextSplitterError,
+    VectorStore, VectorStoreError,
 };
-use crate::domain::{Chunk, ContentType, Document, DocumentId};
+use crate::domain::{ContentType, Document, DocumentId};
 
-pub struct IngestionService<F, L, V>
+pub struct IngestionService<F, L, V, T: ?Sized>
 where
     F: FileLoader,
     L: LlmClient,
     V: VectorStore,
+    T: TextSplitter,
 {
     file_loader: Arc<F>,
     llm_client: Arc<L>,
     vector_store: Arc<V>,
-    chunk_size: usize,
-    chunk_overlap: usize,
+    text_splitter: Arc<T>,
 }
 
-impl<F, L, V> IngestionService<F, L, V>
+impl<F, L, V, T: ?Sized> IngestionService<F, L, V, T>
 where
     F: FileLoader,
     L: LlmClient,
     V: VectorStore,
+    T: TextSplitter,
 {
     pub fn new(
         file_loader: Arc<F>,
         llm_client: Arc<L>,
         vector_store: Arc<V>,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        text_splitter: Arc<T>,
     ) -> Self {
         Self {
             file_loader,
             llm_client,
             vector_store,
-            chunk_size,
-            chunk_overlap,
+            text_splitter,
         }
     }
 
@@ -55,7 +55,12 @@ where
             .await
             .map_err(IngestionError::FileLoading)?;
 
-        let chunks = self.split_into_chunks(&text, doc_id);
+        let chunks = self
+            .text_splitter
+            .split(&text, doc_id)
+            .await
+            .map_err(IngestionError::Splitting)?;
+
         if chunks.is_empty() {
             return Ok(doc_id);
         }
@@ -74,40 +79,14 @@ where
 
         Ok(doc_id)
     }
-
-    fn split_into_chunks(&self, text: &str, document_id: DocumentId) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let total_len = chars.len();
-
-        if total_len == 0 {
-            return chunks;
-        }
-
-        let mut offset = 0;
-        while offset < total_len {
-            let end = (offset + self.chunk_size).min(total_len);
-            let chunk_text: String = chars[offset..end].iter().collect();
-
-            chunks.push(Chunk::new(chunk_text, document_id, None, offset));
-
-            let step = if self.chunk_size > self.chunk_overlap {
-                self.chunk_size - self.chunk_overlap
-            } else {
-                self.chunk_size
-            };
-
-            offset += step;
-        }
-
-        chunks
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestionError {
     #[error("file loading: {0}")]
     FileLoading(#[from] FileLoaderError),
+    #[error("text splitting: {0}")]
+    Splitting(#[from] TextSplitterError),
     #[error("embedding: {0}")]
     Embedding(#[from] LlmClientError),
     #[error("storage: {0}")]

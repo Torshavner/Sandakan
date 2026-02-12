@@ -6,7 +6,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
-use crate::application::ports::{FileLoader, LlmClient, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::infrastructure::observability::request_id_middleware;
 use crate::presentation::handlers::{
     chat_completions_handler, health_handler, ingest_handler, models_handler, query_handler,
@@ -14,11 +14,12 @@ use crate::presentation::handlers::{
 };
 use crate::presentation::state::AppState;
 
-pub fn create_router<F, L, V>(state: AppState<F, L, V>) -> Router
+pub fn create_router<F, L, V, T>(state: AppState<F, L, V, T>) -> Router
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
+    T: TextSplitter + 'static + ?Sized,
 {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -38,8 +39,8 @@ where
     let mut router = Router::new()
         .route("/openapi.json", get(serve_openapi_spec))
         .route("/health", get(health_handler))
-        .route("/api/v1/ingest", post(ingest_handler::<F, L, V>))
-        .route("/api/v1/query", post(query_handler::<F, L, V>))
+        .route("/api/v1/ingest", post(ingest_handler::<F, L, V, T>))
+        .route("/api/v1/query", post(query_handler::<F, L, V, T>))
         .route("/v1/models", get(models_handler))
         .route("/api/models", get(models_handler));
 
@@ -47,21 +48,21 @@ where
         router
             .route(
                 "/v1/chat/completions",
-                post(scaffold_chat_handler::<F, L, V>),
+                post(scaffold_chat_handler::<F, L, V, T>),
             )
             .route(
                 "/api/chat/completions",
-                post(scaffold_chat_handler::<F, L, V>),
+                post(scaffold_chat_handler::<F, L, V, T>),
             )
     } else {
         router
             .route(
                 "/v1/chat/completions",
-                post(chat_completions_handler::<F, L, V>),
+                post(chat_completions_handler::<F, L, V, T>),
             )
             .route(
                 "/api/chat/completions",
-                post(chat_completions_handler::<F, L, V>),
+                post(chat_completions_handler::<F, L, V, T>),
             )
     };
 

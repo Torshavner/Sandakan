@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::{FileLoader, LlmClient, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::infrastructure::observability::sanitize_prompt;
 use crate::presentation::state::AppState;
 
@@ -32,14 +32,15 @@ pub struct ErrorResponse {
 }
 
 #[tracing::instrument(skip(state, request))]
-pub async fn query_handler<F, L, V>(
-    State(state): State<AppState<F, L, V>>,
+pub async fn query_handler<F, L, V, T>(
+    State(state): State<AppState<F, L, V, T>>,
     Json(request): Json<QueryRequest>,
 ) -> impl IntoResponse
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
+    T: TextSplitter + 'static + ?Sized,
 {
     tracing::debug!(question = %sanitize_prompt(&request.question), "Processing query");
 

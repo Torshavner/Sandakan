@@ -96,8 +96,8 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
     );
 
     let mut embedding_values = vec![0.0; 1536];
-    for i in 0..10 {
-        embedding_values[i] = (i as f32) / 10.0;
+    for (i, value) in embedding_values.iter_mut().enumerate().take(10) {
+        *value = (i as f32) / 10.0;
     }
     let embedding = Embedding {
         values: embedding_values,
@@ -105,7 +105,10 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
 
     test_qdrant
         .adapter
-        .upsert(&[chunk.clone()], &[embedding.clone()])
+        .upsert(
+            std::slice::from_ref(&chunk),
+            std::slice::from_ref(&embedding),
+        )
         .await
         .expect("Failed to upsert chunk");
 
