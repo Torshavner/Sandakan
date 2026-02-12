@@ -65,3 +65,24 @@ fn given_text_with_list_marker_hyphen_when_sanitizing_then_preserves_list() {
     let result = sanitize_extracted_text(input);
     assert_eq!(result, "Items:\n- first item\n- second item");
 }
+
+#[test]
+fn given_hyphen_with_invisible_trailing_whitespace_when_sanitizing_then_merges_word() {
+    let input = "The extraction process- \n ing is complex.";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "The extraction processing is complex.");
+}
+
+#[test]
+fn given_hyphen_with_indentation_on_next_line_when_sanitizing_then_merges_word() {
+    let input = "Protect the environ-\n    ment today.";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "Protect the environment today.");
+}
+
+#[test]
+fn given_windows_style_crlf_newlines_when_sanitizing_then_merges_word() {
+    let input = "The operating sys-\r\ntem is ready.";
+    let result = sanitize_extracted_text(input);
+    assert_eq!(result, "The operating system is ready.");
+}

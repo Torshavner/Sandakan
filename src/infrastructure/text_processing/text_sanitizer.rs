@@ -2,17 +2,18 @@ use regex::Regex;
 use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 
-static HYPHEN_NEWLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w)-\n(\w)").unwrap());
+static HYPHEN_NEWLINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?P<prefix>\w)-[ \t]*\r?\n[ \t]*(?P<suffix>\w)").unwrap());
 
 pub fn sanitize_extracted_text(raw: &str) -> String {
     let normalized: String = raw.nfkc().collect();
-    let dehyphenated = HYPHEN_NEWLINE.replace_all(&normalized, "$1$2");
+    let de_hyphenated = HYPHEN_NEWLINE.replace_all(&normalized, "$prefix$suffix");
 
-    let mut result = String::with_capacity(dehyphenated.len());
+    let mut result = String::with_capacity(de_hyphenated.len());
     let mut prev_was_blank = false;
     let mut first_content = true;
 
-    for line in dehyphenated.lines() {
+    for line in de_hyphenated.lines() {
         let trimmed = line.trim();
 
         if trimmed.is_empty() {
