@@ -52,6 +52,39 @@ impl SemanticSplitter {
         sentences.into_iter().filter(|s| !s.is_empty()).collect()
     }
 
+    fn split_oversized_sentence(&self, sentence: &str) -> Result<Vec<String>, TextSplitterError> {
+        let chars: Vec<char> = sentence.chars().collect();
+        let mut sub_chunks = Vec::new();
+        let mut offset = 0;
+
+        while offset < chars.len() {
+            let remaining = chars.len() - offset;
+            let mut low = 1;
+            let mut high = remaining;
+            let mut best_len = 1;
+
+            while low <= high {
+                let mid = (low + high) / 2;
+                let test_text: String = chars[offset..offset + mid].iter().collect();
+                let token_count = self.count_tokens(&test_text)?;
+
+                if token_count <= self.max_tokens {
+                    best_len = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            let chunk_text: String = chars[offset..offset + best_len].iter().collect();
+            sub_chunks.push(chunk_text);
+
+            offset += best_len;
+        }
+
+        Ok(sub_chunks)
+    }
+
     fn merge_sentences_into_chunks(
         &self,
         sentences: Vec<String>,
@@ -71,6 +104,20 @@ impl SemanticSplitter {
             for (idx, sentence) in sentences.iter().enumerate().skip(start_idx) {
                 let sentence_tokens = self.count_tokens(sentence)?;
 
+                if sentence_tokens > self.max_tokens {
+                    if !current_chunk.is_empty() {
+                        chunks.push(std::mem::take(&mut current_chunk));
+                    }
+
+                    let sub_chunks = self.split_oversized_sentence(sentence)?;
+                    chunks.extend(sub_chunks);
+
+                    end_idx = idx;
+                    start_idx = idx + 1;
+
+                    continue;
+                }
+
                 if current_tokens + sentence_tokens > self.max_tokens && !current_chunk.is_empty() {
                     break;
                 }
@@ -87,24 +134,26 @@ impl SemanticSplitter {
                 chunks.push(current_chunk);
             }
 
-            let mut overlap_idx = end_idx;
-            let mut overlap_tokens = 0;
+            if start_idx <= end_idx {
+                let mut overlap_idx = end_idx;
+                let mut overlap_tokens = 0;
 
-            while overlap_idx > start_idx && overlap_tokens < self.overlap_tokens {
-                let sentence_tokens = self.count_tokens(&sentences[overlap_idx])?;
-                overlap_tokens += sentence_tokens;
-                if overlap_idx > 0 {
-                    overlap_idx -= 1;
-                } else {
-                    break;
+                while overlap_idx > start_idx && overlap_tokens < self.overlap_tokens {
+                    let sentence_tokens = self.count_tokens(&sentences[overlap_idx])?;
+                    overlap_tokens += sentence_tokens;
+                    if overlap_idx > 0 {
+                        overlap_idx -= 1;
+                    } else {
+                        break;
+                    }
                 }
-            }
 
-            start_idx = if overlap_idx < end_idx {
-                overlap_idx + 1
-            } else {
-                end_idx + 1
-            };
+                start_idx = if overlap_idx < end_idx {
+                    overlap_idx + 1
+                } else {
+                    end_idx + 1
+                };
+            }
 
             if start_idx <= end_idx && end_idx == sentences.len() - 1 {
                 break;
