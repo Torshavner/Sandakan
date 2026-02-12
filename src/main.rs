@@ -6,27 +6,16 @@ use config::Environment as EnvironmentSource;
 use config::{Config, File};
 use tokio::net::TcpListener;
 
+use sandakan::application::ports::FileLoader;
 use sandakan::application::services::{IngestionService, RetrievalService};
+use sandakan::domain::ContentType;
 use sandakan::infrastructure::llm::OpenAiClient;
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::QdrantAdapter;
-use sandakan::infrastructure::text_processing::TextSplitterFactory;
+use sandakan::infrastructure::text_processing::{
+    CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
+};
 use sandakan::presentation::{AppState, Environment, ScaffoldConfig, Settings, create_router};
-
-struct StubFileLoader;
-
-#[async_trait::async_trait]
-impl sandakan::application::ports::FileLoader for StubFileLoader {
-    async fn extract_text(
-        &self,
-        data: &[u8],
-        _document: &sandakan::domain::Document,
-    ) -> Result<String, sandakan::application::ports::FileLoaderError> {
-        String::from_utf8(data.to_vec()).map_err(|e| {
-            sandakan::application::ports::FileLoaderError::ExtractionFailed(e.to_string())
-        })
-    }
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -55,7 +44,12 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Application starting in {} mode", environment);
 
-    let file_loader = Arc::new(StubFileLoader);
+    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(PdfAdapter::new());
+    let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
+    let file_loader = Arc::new(CompositeFileLoader::new(vec![
+        (ContentType::Pdf, pdf_adapter),
+        (ContentType::Text, text_adapter),
+    ]));
     let llm_client = Arc::new(OpenAiClient::new(
         settings.llm.api_key.clone(),
         settings.embeddings.model.clone(),
