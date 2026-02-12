@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use crate::application::ports::{LlmClient, LlmClientError, VectorStore, VectorStoreError};
+use crate::application::ports::{
+    Embedder, EmbedderError, LlmClient, LlmClientError, VectorStore, VectorStoreError,
+};
 
 pub struct RetrievalService<L, V>
 where
     L: LlmClient,
     V: VectorStore,
 {
+    embedder: Arc<dyn Embedder>,
     llm_client: Arc<L>,
     vector_store: Arc<V>,
     top_k: usize,
@@ -17,8 +20,14 @@ where
     L: LlmClient,
     V: VectorStore,
 {
-    pub fn new(llm_client: Arc<L>, vector_store: Arc<V>, top_k: usize) -> Self {
+    pub fn new(
+        embedder: Arc<dyn Embedder>,
+        llm_client: Arc<L>,
+        vector_store: Arc<V>,
+        top_k: usize,
+    ) -> Self {
         Self {
+            embedder,
             llm_client,
             vector_store,
             top_k,
@@ -27,7 +36,7 @@ where
 
     pub async fn query(&self, question: &str) -> Result<QueryResponse, RetrievalError> {
         let query_embedding = self
-            .llm_client
+            .embedder
             .embed(question)
             .await
             .map_err(RetrievalError::Embedding)?;
@@ -86,7 +95,7 @@ pub struct SourceChunk {
 #[derive(Debug, thiserror::Error)]
 pub enum RetrievalError {
     #[error("embedding: {0}")]
-    Embedding(#[from] LlmClientError),
+    Embedding(EmbedderError),
     #[error("search: {0}")]
     Search(#[from] VectorStoreError),
     #[error("completion: {0}")]

@@ -25,10 +25,19 @@ pub struct QdrantSettings {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingsSettings {
+    pub provider: EmbeddingProvider,
     pub model: String,
     pub strategy: EmbeddingStrategy,
     pub dimension: usize,
     pub chunk_overlap: usize,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmbeddingProvider {
+    Local,
+    #[serde(rename = "openai")]
+    OpenAi,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

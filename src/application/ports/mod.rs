@@ -1,5 +1,6 @@
 mod collection_config;
 mod distance_metric;
+mod embedder;
 mod file_loader;
 mod llm_client;
 mod payload_field_type;
@@ -11,6 +12,7 @@ mod vector_store_error;
 
 pub use collection_config::CollectionConfig;
 pub use distance_metric::DistanceMetric;
+pub use embedder::{Embedder, EmbedderError};
 pub use file_loader::{FileLoader, FileLoaderError};
 pub use llm_client::{LlmClient, LlmClientError};
 pub use payload_field_type::PayloadFieldType;

@@ -3,22 +3,22 @@ use sandakan::application::ports::{
 };
 
 #[test]
-fn given_openai_default_config_when_created_then_has_1536_dimensions() {
-    let config = CollectionConfig::openai_default();
+fn given_new_config_when_created_with_dimensions_then_has_specified_dimensions() {
+    let config = CollectionConfig::new(1536);
 
     assert_eq!(config.vector_dimensions, 1536);
 }
 
 #[test]
-fn given_openai_default_config_when_created_then_uses_cosine_distance() {
-    let config = CollectionConfig::openai_default();
+fn given_new_config_when_created_then_uses_cosine_distance() {
+    let config = CollectionConfig::new(384);
 
     assert_eq!(config.distance_metric, DistanceMetric::Cosine);
 }
 
 #[test]
-fn given_openai_default_config_when_created_then_has_required_payload_indexes() {
-    let config = CollectionConfig::openai_default();
+fn given_new_config_when_created_then_has_required_payload_indexes() {
+    let config = CollectionConfig::new(384);
 
     let field_names: Vec<&str> = config
         .payload_indexes

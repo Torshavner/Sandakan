@@ -11,7 +11,7 @@ where
     V: VectorStore,
     T: TextSplitter,
 {
-    pub ingestion_service: Arc<IngestionService<F, L, V, T>>,
+    pub ingestion_service: Arc<IngestionService<F, V, T>>,
     pub retrieval_service: Arc<RetrievalService<L, V>>,
     pub scaffold_config: ScaffoldConfig,
 }

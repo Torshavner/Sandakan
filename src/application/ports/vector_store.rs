@@ -9,6 +9,8 @@ pub trait VectorStore: Send + Sync {
 
     async fn collection_exists(&self) -> Result<bool, VectorStoreError>;
 
+    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError>;
+
     async fn delete_collection(&self) -> Result<(), VectorStoreError>;
 
     async fn upsert(
