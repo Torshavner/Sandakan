@@ -1,40 +1,38 @@
 use std::sync::Arc;
 
 use crate::application::ports::{
-    FileLoader, FileLoaderError, LlmClient, LlmClientError, TextSplitter, TextSplitterError,
+    Embedder, EmbedderError, FileLoader, FileLoaderError, TextSplitter, TextSplitterError,
     VectorStore, VectorStoreError,
 };
 use crate::domain::{ContentType, Document, DocumentId};
 
-pub struct IngestionService<F, L, V, T: ?Sized>
+pub struct IngestionService<F, V, T: ?Sized>
 where
     F: FileLoader,
-    L: LlmClient,
     V: VectorStore,
     T: TextSplitter,
 {
     file_loader: Arc<F>,
-    llm_client: Arc<L>,
+    embedder: Arc<dyn Embedder>,
     vector_store: Arc<V>,
     text_splitter: Arc<T>,
 }
 
-impl<F, L, V, T: ?Sized> IngestionService<F, L, V, T>
+impl<F, V, T: ?Sized> IngestionService<F, V, T>
 where
     F: FileLoader,
-    L: LlmClient,
     V: VectorStore,
     T: TextSplitter,
 {
     pub fn new(
         file_loader: Arc<F>,
-        llm_client: Arc<L>,
+        embedder: Arc<dyn Embedder>,
         vector_store: Arc<V>,
         text_splitter: Arc<T>,
     ) -> Self {
         Self {
             file_loader,
-            llm_client,
+            embedder,
             vector_store,
             text_splitter,
         }
@@ -67,7 +65,7 @@ where
 
         let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         let embeddings = self
-            .llm_client
+            .embedder
             .embed_batch(&texts)
             .await
             .map_err(IngestionError::Embedding)?;
@@ -88,7 +86,7 @@ pub enum IngestionError {
     #[error("text splitting: {0}")]
     Splitting(#[from] TextSplitterError),
     #[error("embedding: {0}")]
-    Embedding(#[from] LlmClientError),
+    Embedding(#[from] EmbedderError),
     #[error("storage: {0}")]
     Storage(#[from] VectorStoreError),
 }

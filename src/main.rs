@@ -6,10 +6,10 @@ use config::Environment as EnvironmentSource;
 use config::{Config, File};
 use tokio::net::TcpListener;
 
-use sandakan::application::ports::FileLoader;
+use sandakan::application::ports::{CollectionConfig, FileLoader, VectorStore};
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::ContentType;
-use sandakan::infrastructure::llm::OpenAiClient;
+use sandakan::infrastructure::llm::{EmbedderFactory, OpenAiClient};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::QdrantAdapter;
 use sandakan::infrastructure::text_processing::{
@@ -50,11 +50,19 @@ async fn main() -> anyhow::Result<()> {
         (ContentType::Pdf, pdf_adapter),
         (ContentType::Text, text_adapter),
     ]));
+
+    let embedder = EmbedderFactory::create(
+        settings.embeddings.provider,
+        settings.embeddings.model.clone(),
+        Some(settings.llm.api_key.clone()),
+    )
+    .expect("Failed to initialize embedder");
+
     let llm_client = Arc::new(OpenAiClient::new(
         settings.llm.api_key.clone(),
-        settings.embeddings.model.clone(),
         settings.llm.chat_model.clone(),
     ));
+
     let vector_store = Arc::new(
         QdrantAdapter::new(
             &settings.qdrant.url,
@@ -64,6 +72,33 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to Qdrant"),
     );
 
+    let collection_config = CollectionConfig::new(settings.embeddings.dimension as u64);
+
+    match vector_store.get_collection_vector_size().await {
+        Ok(Some(existing_size)) => {
+            if existing_size != collection_config.vector_dimensions {
+                panic!(
+                    "Dimension mismatch: Qdrant collection has {} dims but embedder config has {}",
+                    existing_size, collection_config.vector_dimensions
+                );
+            }
+            tracing::info!(dimension = existing_size, "Collection dimension validated");
+        }
+        Ok(None) => {
+            vector_store
+                .create_collection(&collection_config)
+                .await
+                .expect("Failed to create collection");
+            tracing::info!(
+                dimension = collection_config.vector_dimensions,
+                "Collection created"
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Could not check collection: {}", e);
+        }
+    }
+
     let text_splitter = TextSplitterFactory::create(
         settings.embeddings.strategy,
         settings.chunking.max_chunk_size,
@@ -72,12 +107,13 @@ async fn main() -> anyhow::Result<()> {
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
-        Arc::clone(&llm_client),
+        Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
+        Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         5,

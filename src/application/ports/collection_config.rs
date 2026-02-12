@@ -8,9 +8,9 @@ pub struct CollectionConfig {
 }
 
 impl CollectionConfig {
-    pub fn openai_default() -> Self {
+    pub fn new(vector_dimensions: u64) -> Self {
         Self {
-            vector_dimensions: 1536,
+            vector_dimensions,
             distance_metric: DistanceMetric::Cosine,
             payload_indexes: vec![
                 PayloadIndex {

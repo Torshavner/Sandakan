@@ -34,6 +34,13 @@ anyhow = "1"
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Local ML inference
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+hf-hub = { version = "0.4", features = ["tokio"] }
+tokenizers = "0.21"
+
 # Configuration
 config = "0.14"
 dotenvy = "0.15"

@@ -109,6 +109,33 @@ impl VectorStore for QdrantAdapter {
     }
 
     #[instrument(skip(self), fields(collection = %self.collection_name))]
+    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
+        if !self.collection_exists().await? {
+            return Ok(None);
+        }
+
+        let collection_info = self
+            .client
+            .collection_info(&self.collection_name)
+            .await
+            .map_err(|e| VectorStoreError::ConnectionFailed(e.to_string()))?;
+
+        let vector_size = collection_info
+            .result
+            .and_then(|result| result.config)
+            .and_then(|config| config.params)
+            .and_then(|params| params.vectors_config)
+            .and_then(|vectors_config| match vectors_config.config {
+                Some(qdrant_client::qdrant::vectors_config::Config::Params(params)) => {
+                    Some(params.size)
+                }
+                _ => None,
+            });
+
+        Ok(vector_size)
+    }
+
+    #[instrument(skip(self), fields(collection = %self.collection_name))]
     async fn delete_collection(&self) -> Result<(), VectorStoreError> {
         if !self.collection_exists().await? {
             return Ok(());

@@ -56,7 +56,7 @@ async fn given_test_suite_starting_up_when_initializing_qdrant_container_then_in
 #[tokio::test]
 async fn given_running_qdrant_container_when_creating_collection_then_collection_exists() {
     let test_qdrant = TestQdrant::new().await;
-    let config = CollectionConfig::openai_default();
+    let config = CollectionConfig::new(384);
 
     let created = test_qdrant
         .adapter
@@ -79,7 +79,7 @@ async fn given_running_qdrant_container_when_creating_collection_then_collection
 async fn given_running_qdrant_container_when_ingestion_service_upserts_document_chunk_then_vector_count_increments_and_payload_matches()
  {
     let test_qdrant = TestQdrant::new().await;
-    let config = CollectionConfig::openai_default();
+    let config = CollectionConfig::new(384);
 
     test_qdrant
         .adapter
@@ -95,7 +95,7 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
         0,
     );
 
-    let mut embedding_values = vec![0.0; 1536];
+    let mut embedding_values = vec![0.0; 384];
     for (i, value) in embedding_values.iter_mut().enumerate().take(10) {
         *value = (i as f32) / 10.0;
     }
@@ -136,7 +136,7 @@ async fn given_running_qdrant_container_when_ingestion_service_upserts_document_
 async fn given_tests_completed_when_test_scope_ends_then_container_is_automatically_stopped() {
     {
         let test_qdrant = TestQdrant::new().await;
-        let config = CollectionConfig::openai_default();
+        let config = CollectionConfig::new(384);
 
         test_qdrant
             .adapter

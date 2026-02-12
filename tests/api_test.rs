@@ -8,8 +8,8 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use sandakan::application::ports::{
-    CollectionConfig, FileLoader, FileLoaderError, LlmClient, LlmClientError, SearchResult,
-    VectorStore, VectorStoreError,
+    CollectionConfig, Embedder, EmbedderError, FileLoader, FileLoaderError, LlmClient,
+    LlmClientError, SearchResult, VectorStore, VectorStoreError,
 };
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::{Chunk, ChunkId, Document, DocumentId, Embedding};
@@ -29,21 +29,26 @@ impl FileLoader for MockFileLoader {
     }
 }
 
+struct MockEmbedder;
+
+#[async_trait::async_trait]
+impl Embedder for MockEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
+        Ok(Embedding::new(vec![0.1; 384]))
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedderError> {
+        Ok(texts
+            .iter()
+            .map(|_| Embedding::new(vec![0.1; 384]))
+            .collect())
+    }
+}
+
 struct MockLlmClient;
 
 #[async_trait::async_trait]
 impl LlmClient for MockLlmClient {
-    async fn embed(&self, _text: &str) -> Result<Embedding, LlmClientError> {
-        Ok(Embedding::new(vec![0.1; 1536]))
-    }
-
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, LlmClientError> {
-        Ok(texts
-            .iter()
-            .map(|_| Embedding::new(vec![0.1; 1536]))
-            .collect())
-    }
-
     async fn complete(&self, _prompt: &str, _context: &str) -> Result<String, LlmClientError> {
         Ok("Mock answer".to_string())
     }
@@ -62,6 +67,10 @@ impl VectorStore for MockVectorStore {
 
     async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
         Ok(true)
+    }
+
+    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
+        Ok(Some(384))
     }
 
     async fn delete_collection(&self) -> Result<(), VectorStoreError> {
@@ -96,6 +105,7 @@ fn create_test_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
     let file_loader = Arc::new(MockFileLoader);
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
     let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
@@ -105,12 +115,13 @@ fn create_test_app() -> axum::Router {
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
-        Arc::clone(&llm_client),
+        Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
+        Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         TEST_TOP_K,
@@ -132,6 +143,7 @@ fn create_scaffold_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
     let file_loader = Arc::new(MockFileLoader);
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
     let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
@@ -141,12 +153,13 @@ fn create_scaffold_app() -> axum::Router {
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
-        Arc::clone(&llm_client),
+        Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
+        Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         TEST_TOP_K,
