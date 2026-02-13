@@ -63,6 +63,16 @@ impl OpenAiClient {
 
 #[async_trait]
 impl LlmClient for OpenAiClient {
+    async fn complete_stream(
+        &self,
+        _prompt: &str,
+        _context: &str,
+    ) -> Result<crate::application::ports::LlmTokenStream, LlmClientError> {
+        Err(LlmClientError::InvalidResponse(
+            "streaming not supported in legacy OpenAiClient".to_string(),
+        ))
+    }
+
     async fn complete(&self, prompt: &str, context: &str) -> Result<String, LlmClientError> {
         let system_message_content = self.system_prompt_template.replace("{context}", context);
 

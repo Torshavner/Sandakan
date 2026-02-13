@@ -11,7 +11,7 @@ use sandakan::application::ports::{
 };
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::ContentType;
-use sandakan::infrastructure::llm::{EmbedderFactory, OpenAiClient};
+use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
     PgConversationRepository, PgJobRepository, QdrantAdapter, create_pool,
@@ -78,13 +78,15 @@ async fn main() -> anyhow::Result<()> {
     )
     .expect("Failed to initialize embedder");
 
-    let llm_client = Arc::new(OpenAiClient::new(
-        settings.llm.api_key.clone(),
-        settings.llm.chat_model.clone(),
-        settings.llm.max_tokens,
-        settings.llm.temperature,
-        settings.rag.system_prompt.clone(),
-    ));
+    let llm_client = Arc::new(
+        create_streaming_llm_client(&settings.llm, settings.rag.system_prompt.clone())
+            .expect("Failed to initialize LLM client"),
+    );
+    tracing::info!(
+        provider = %settings.llm.provider,
+        model = %settings.llm.chat_model,
+        "LLM client initialized"
+    );
 
     let vector_store = Arc::new(
         QdrantAdapter::new(
@@ -150,6 +152,8 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         ingestion_service,
         retrieval_service,
+        conversation_repository,
+        settings: settings.clone(),
         scaffold_config: ScaffoldConfig::default(),
     };
 

@@ -1,6 +1,7 @@
 use sandakan::application::ports::{CollectionConfig, VectorStore};
 use sandakan::domain::{Chunk, DocumentId, Embedding};
 use sandakan::infrastructure::persistence::QdrantAdapter;
+use std::time::Duration;
 use testcontainers::{ContainerAsync, GenericImage, core::ContainerPort, runners::AsyncRunner};
 
 pub struct TestQdrant {
@@ -26,17 +27,56 @@ impl TestQdrant {
         let qdrant_url = format!("http://localhost:{}", host_port);
         let collection_name = format!("test_collection_{}", uuid::Uuid::new_v4());
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let adapter = QdrantAdapter::new(&qdrant_url, collection_name)
-            .await
-            .expect("Failed to create QdrantAdapter");
+        let adapter = wait_for_qdrant_connection(&qdrant_url, collection_name).await;
 
         Self {
             adapter,
             _container: container,
         }
     }
+}
+
+async fn wait_for_qdrant_connection(url: &str, collection_name: String) -> QdrantAdapter {
+    let max_retries = 10;
+    let mut delay = Duration::from_millis(500);
+
+    for attempt in 1..=max_retries {
+        let adapter = match QdrantAdapter::new(url, collection_name.clone()).await {
+            Ok(a) => a,
+            Err(e) if attempt < max_retries => {
+                eprintln!(
+                    "Qdrant client build failed (attempt {attempt}/{max_retries}): {e}, retrying in {}ms",
+                    delay.as_millis()
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
+                continue;
+            }
+            Err(e) => {
+                panic!("Failed to build Qdrant client after {max_retries} attempts: {e}");
+            }
+        };
+
+        // Probe a real gRPC call to verify the server is fully ready
+        match adapter.collection_exists().await {
+            Ok(_) => {
+                eprintln!("Qdrant ready after attempt {attempt}");
+                return adapter;
+            }
+            Err(e) if attempt < max_retries => {
+                eprintln!(
+                    "Qdrant not ready (attempt {attempt}/{max_retries}): {e}, retrying in {}ms",
+                    delay.as_millis()
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
+            }
+            Err(e) => {
+                panic!("Failed to connect to Qdrant after {max_retries} attempts: {e}");
+            }
+        }
+    }
+    unreachable!()
 }
 
 #[tokio::test]

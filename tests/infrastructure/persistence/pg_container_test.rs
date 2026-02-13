@@ -1,5 +1,6 @@
 use sandakan::infrastructure::persistence::{PgConversationRepository, PgJobRepository};
 use sqlx::PgPool;
+use std::time::Duration;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt, core::ContainerPort, runners::AsyncRunner,
 };
@@ -31,11 +32,7 @@ impl TestPostgres {
 
         let database_url = format!("postgres://test:test@localhost:{}/testdb", host_port);
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let pool = sqlx::PgPool::connect(&database_url)
-            .await
-            .expect("Failed to connect to PostgreSQL");
+        let pool = wait_for_pg_connection(&database_url).await;
 
         sqlx::migrate!()
             .run(&pool)
@@ -52,6 +49,32 @@ impl TestPostgres {
             _container: container,
         }
     }
+}
+
+async fn wait_for_pg_connection(url: &str) -> PgPool {
+    let max_retries = 10;
+    let mut delay = Duration::from_millis(500);
+
+    for attempt in 1..=max_retries {
+        match sqlx::PgPool::connect(url).await {
+            Ok(pool) => {
+                eprintln!("PostgreSQL ready after attempt {attempt}");
+                return pool;
+            }
+            Err(e) if attempt < max_retries => {
+                eprintln!(
+                    "PostgreSQL not ready (attempt {attempt}/{max_retries}): {e}, retrying in {}ms",
+                    delay.as_millis()
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
+            }
+            Err(e) => {
+                panic!("Failed to connect to PostgreSQL after {max_retries} attempts: {e}");
+            }
+        }
+    }
+    unreachable!()
 }
 
 #[tokio::test]
