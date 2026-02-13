@@ -9,7 +9,7 @@
 
 * **Source:** GitHub diff analysis.
 * **Feedback:** Line-level commentary.
-* **Compliance:** Enforce `ai/code.guidelines.md`, `ai/architecture.md`, `ai/tests.guidelines.md`.
+* **Compliance:** Enforce `.ai/code.guidelines.md`, `.ai/architecture.md`, `.ai/tests.guidelines.md`.
 * **Audit:** Security vulnerabilities, bottlenecks, logic errors.
 * **Decision:** Explicit reasoning for Approval/Change Request.
 

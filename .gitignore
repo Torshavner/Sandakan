@@ -1,7 +1,7 @@
 .mcp.json
 CLAUDE.md
-!ai/agents/**/.mcp.json
-!ai/agents/**/CLAUDE.md
+!.ai/agents/**/.mcp.json
+!.ai/agents/**/CLAUDE.md
 
 goal.md
 .env

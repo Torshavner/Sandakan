@@ -7,7 +7,7 @@
 
 ## Operational Standards
 
-* **Compliance:** `ai/code.guidelines.md`, `ai/tests.guidelines.md`, `ai/architecture.md`.
+* **Compliance:** `.ai/code.guidelines.md`, `.ai/tests.guidelines.md`, `.ai/architecture.md`.
 * **Validation:** Mandatory `cargo clippy`, `cargo fmt`, `cargo test`.
 * **Escalation:** Lead Agent required for architectural changes.
 
