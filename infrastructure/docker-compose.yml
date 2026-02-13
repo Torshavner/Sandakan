@@ -1,4 +1,45 @@
 services:
+  # PostgreSQL Database Service
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-sandakan}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-sandakan}
+      - POSTGRES_DB=${POSTGRES_DB:-sandakan}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandakan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag-network
+
+  # PostgreSQL Admin Interface
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@sandakan.local}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - rag-network
+
   # Vector Database Service
   qdrant:
     image: qdrant/qdrant:latest
@@ -71,6 +112,10 @@ services:
       - rag-network
 
 volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
   qdrant_data:
     driver: local
   open_webui_data:

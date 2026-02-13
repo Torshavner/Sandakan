@@ -3,14 +3,17 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::domain::ConversationId;
 use crate::infrastructure::observability::sanitize_prompt;
 use crate::presentation::state::AppState;
 
 #[derive(Deserialize)]
 pub struct QueryRequest {
     pub question: String,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -44,7 +47,16 @@ where
 {
     tracing::debug!(question = %sanitize_prompt(&request.question), "Processing query");
 
-    match state.retrieval_service.query(&request.question).await {
+    let conversation_id = request
+        .conversation_id
+        .and_then(|id| Uuid::parse_str(&id).ok())
+        .map(ConversationId::from_uuid);
+
+    match state
+        .retrieval_service
+        .query(&request.question, conversation_id)
+        .await
+    {
         Ok(response) => {
             tracing::info!(sources_count = response.sources.len(), "Query successful");
             let sources = response

@@ -4,6 +4,7 @@ use serde::Deserialize;
 pub struct Settings {
     pub server: ServerSettings,
     pub qdrant: QdrantSettings,
+    pub database: DatabaseSettings,
     pub embeddings: EmbeddingsSettings,
     pub chunking: ChunkingSettings,
     pub llm: LlmSettings,
@@ -95,4 +96,11 @@ pub struct RagSettings {
     pub top_k: usize,
     pub system_prompt: String,
     pub fallback_message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseSettings {
+    pub url: String,
+    pub max_connections: u32,
+    pub run_migrations: bool,
 }

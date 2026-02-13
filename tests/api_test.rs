@@ -9,11 +9,15 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use sandakan::application::ports::{
-    CollectionConfig, Embedder, EmbedderError, FileLoader, FileLoaderError, LlmClient,
-    LlmClientError, SearchResult, VectorStore, VectorStoreError,
+    CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
+    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, VectorStore,
+    VectorStoreError,
 };
 use sandakan::application::services::{IngestionService, RetrievalService};
-use sandakan::domain::{Chunk, ChunkId, Document, DocumentId, Embedding};
+use sandakan::domain::{
+    Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
+    JobStatus, Message,
+};
 use sandakan::presentation::{AppState, ScaffoldConfig, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
@@ -152,6 +156,71 @@ impl VectorStore for MockVectorStoreLowScore {
     }
 }
 
+struct MockJobRepository;
+
+#[async_trait::async_trait]
+impl JobRepository for MockJobRepository {
+    async fn create(&self, _job: &Job) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_by_id(&self, _id: JobId) -> Result<Option<Job>, RepositoryError> {
+        Ok(None)
+    }
+
+    async fn update_status(
+        &self,
+        _id: JobId,
+        _status: JobStatus,
+        _error_message: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn list_by_status(&self, _status: JobStatus) -> Result<Vec<Job>, RepositoryError> {
+        Ok(vec![])
+    }
+}
+
+struct MockConversationRepository;
+
+#[async_trait::async_trait]
+impl ConversationRepository for MockConversationRepository {
+    async fn create_conversation(
+        &self,
+        _conversation: &Conversation,
+    ) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_conversation(
+        &self,
+        _id: ConversationId,
+    ) -> Result<Option<Conversation>, RepositoryError> {
+        Ok(None)
+    }
+
+    async fn append_message(&self, _message: &Message) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_messages(
+        &self,
+        _conversation_id: ConversationId,
+        _limit: usize,
+    ) -> Result<Vec<Message>, RepositoryError> {
+        Ok(vec![])
+    }
+}
+
+fn mock_job_repository() -> Arc<dyn JobRepository> {
+    Arc::new(MockJobRepository)
+}
+
+fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
+    Arc::new(MockConversationRepository)
+}
+
 fn create_test_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -169,12 +238,14 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
+        mock_job_repository(),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
@@ -210,12 +281,14 @@ fn create_scaffold_app() -> axum::Router {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
+        mock_job_repository(),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
@@ -518,12 +591,14 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
+        mock_job_repository(),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
