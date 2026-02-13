@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::application::ports::{
+    ConversationRepository, FileLoader, LlmClient, TextSplitter, VectorStore,
+};
 use crate::application::services::{IngestionService, RetrievalService};
-use crate::presentation::config::ScaffoldConfig;
+use crate::presentation::config::{ScaffoldConfig, Settings};
 
 pub struct AppState<F, L, V, T: ?Sized>
 where
@@ -13,6 +15,8 @@ where
 {
     pub ingestion_service: Arc<IngestionService<F, V, T>>,
     pub retrieval_service: Arc<RetrievalService<L, V>>,
+    pub conversation_repository: Arc<dyn ConversationRepository>,
+    pub settings: Settings,
     pub scaffold_config: ScaffoldConfig,
 }
 
@@ -27,6 +31,8 @@ where
         Self {
             ingestion_service: Arc::clone(&self.ingestion_service),
             retrieval_service: Arc::clone(&self.retrieval_service),
+            conversation_repository: Arc::clone(&self.conversation_repository),
+            settings: self.settings.clone(),
             scaffold_config: self.scaffold_config.clone(),
         }
     }

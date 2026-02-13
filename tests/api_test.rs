@@ -18,7 +18,12 @@ use sandakan::domain::{
     Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
     JobStatus, Message,
 };
-use sandakan::presentation::{AppState, ScaffoldConfig, create_router};
+use sandakan::presentation::config::{
+    AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
+    EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
+};
+use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -59,6 +64,23 @@ struct MockLlmClient;
 impl LlmClient for MockLlmClient {
     async fn complete(&self, _prompt: &str, _context: &str) -> Result<String, LlmClientError> {
         Ok("Mock answer".to_string())
+    }
+
+    async fn complete_stream(
+        &self,
+        _prompt: &str,
+        _context: &str,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Mock answer".to_string())
+        })))
     }
 }
 
@@ -156,32 +178,6 @@ impl VectorStore for MockVectorStoreLowScore {
     }
 }
 
-struct MockJobRepository;
-
-#[async_trait::async_trait]
-impl JobRepository for MockJobRepository {
-    async fn create(&self, _job: &Job) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn get_by_id(&self, _id: JobId) -> Result<Option<Job>, RepositoryError> {
-        Ok(None)
-    }
-
-    async fn update_status(
-        &self,
-        _id: JobId,
-        _status: JobStatus,
-        _error_message: Option<&str>,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn list_by_status(&self, _status: JobStatus) -> Result<Vec<Job>, RepositoryError> {
-        Ok(vec![])
-    }
-}
-
 struct MockConversationRepository;
 
 #[async_trait::async_trait]
@@ -209,6 +205,94 @@ impl ConversationRepository for MockConversationRepository {
         _conversation_id: ConversationId,
         _limit: usize,
     ) -> Result<Vec<Message>, RepositoryError> {
+        Ok(vec![])
+    }
+}
+
+fn test_settings() -> Settings {
+    Settings {
+        server: ServerSettings {
+            host: "127.0.0.1".to_string(),
+            port: 3000,
+        },
+        qdrant: QdrantSettings {
+            url: "http://localhost:6334".to_string(),
+            collection_name: "test".to_string(),
+        },
+        database: DatabaseSettings {
+            url: "postgres://test".to_string(),
+            max_connections: 5,
+            run_migrations: false,
+        },
+        embeddings: EmbeddingsSettings {
+            provider: EmbeddingProvider::Local,
+            model: "test-model".to_string(),
+            strategy: EmbeddingStrategy::Semantic,
+            dimension: 384,
+            chunk_overlap: 50,
+        },
+        chunking: ChunkingSettings {
+            max_chunk_size: 512,
+            overlap_tokens: 50,
+        },
+        llm: LlmSettings {
+            provider: "openai".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: None,
+            azure_endpoint: None,
+            chat_model: "gpt-4".to_string(),
+            max_tokens: 4096,
+            temperature: 0.7,
+            sse_keep_alive_seconds: 15,
+        },
+        logging: LoggingSettings {
+            level: "info".to_string(),
+            enable_json: false,
+            enable_udp: false,
+        },
+        extraction: ExtractionSettings {
+            pdf: PdfExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 50,
+            },
+            audio: AudioExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 100,
+                whisper_model: "base".to_string(),
+            },
+        },
+        rag: RagSettings {
+            similarity_threshold: TEST_SIMILARITY_THRESHOLD,
+            max_context_tokens: TEST_MAX_CONTEXT_TOKENS,
+            top_k: TEST_TOP_K,
+            system_prompt: "test prompt".to_string(),
+            fallback_message: TEST_FALLBACK_MESSAGE.to_string(),
+        },
+    }
+}
+
+struct MockJobRepository;
+
+#[async_trait::async_trait]
+impl JobRepository for MockJobRepository {
+    async fn create(&self, _job: &Job) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_by_id(&self, _id: JobId) -> Result<Option<Job>, RepositoryError> {
+        Ok(None)
+    }
+
+    async fn update_status(
+        &self,
+        _id: JobId,
+        _status: JobStatus,
+        _error_message: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn list_by_status(&self, _status: JobStatus) -> Result<Vec<Job>, RepositoryError> {
         Ok(vec![])
     }
 }
@@ -255,6 +339,8 @@ fn create_test_app() -> axum::Router {
     let state = AppState {
         ingestion_service,
         retrieval_service,
+        conversation_repository: Arc::new(MockConversationRepository),
+        settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: false,
             mock_response_delay_ms: 0,
@@ -298,6 +384,8 @@ fn create_scaffold_app() -> axum::Router {
     let state = AppState {
         ingestion_service,
         retrieval_service,
+        conversation_repository: Arc::new(MockConversationRepository),
+        settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: true,
             mock_response_delay_ms: 0,
@@ -608,6 +696,8 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
     let state = AppState {
         ingestion_service,
         retrieval_service,
+        conversation_repository: Arc::new(MockConversationRepository),
+        settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: false,
             mock_response_delay_ms: 0,
