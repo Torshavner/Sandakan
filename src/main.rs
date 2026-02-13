@@ -61,6 +61,9 @@ async fn main() -> anyhow::Result<()> {
     let llm_client = Arc::new(OpenAiClient::new(
         settings.llm.api_key.clone(),
         settings.llm.chat_model.clone(),
+        settings.llm.max_tokens,
+        settings.llm.temperature,
+        settings.rag.system_prompt.clone(),
     ));
 
     let vector_store = Arc::new(
@@ -116,7 +119,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        5,
+        settings.rag.top_k,
+        settings.rag.similarity_threshold,
+        settings.rag.max_context_tokens,
+        settings.rag.fallback_message.clone(),
     ));
 
     let state = AppState {

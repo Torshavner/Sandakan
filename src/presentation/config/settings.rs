@@ -9,6 +9,7 @@ pub struct Settings {
     pub llm: LlmSettings,
     pub logging: LoggingSettings,
     pub extraction: ExtractionSettings,
+    pub rag: RagSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,4 +86,13 @@ pub struct AudioExtractionSettings {
     pub enabled: bool,
     pub max_file_size_mb: usize,
     pub whisper_model: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RagSettings {
+    pub similarity_threshold: f32,
+    pub max_context_tokens: usize,
+    pub top_k: usize,
+    pub system_prompt: String,
+    pub fallback_message: String,
 }
