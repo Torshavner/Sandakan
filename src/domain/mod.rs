@@ -1,7 +1,23 @@
 mod chunk;
+mod conversation;
+mod conversation_id;
 mod document;
 mod embedding;
+mod job;
+mod job_id;
+mod job_status;
+mod message;
+mod message_id;
+mod message_role;
 
 pub use chunk::{Chunk, ChunkId, DocumentId};
+pub use conversation::Conversation;
+pub use conversation_id::ConversationId;
 pub use document::{ContentType, Document};
 pub use embedding::Embedding;
+pub use job::Job;
+pub use job_id::JobId;
+pub use job_status::JobStatus;
+pub use message::Message;
+pub use message_id::MessageId;
+pub use message_role::MessageRole;

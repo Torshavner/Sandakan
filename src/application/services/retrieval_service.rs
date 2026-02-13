@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use crate::application::ports::{
-    Embedder, EmbedderError, LlmClient, LlmClientError, VectorStore, VectorStoreError,
+    ConversationRepository, Embedder, EmbedderError, LlmClient, LlmClientError, RepositoryError,
+    VectorStore, VectorStoreError,
 };
 use crate::application::services::count_tokens;
+use crate::domain::{ConversationId, Message, MessageRole};
 
 pub struct RetrievalService<L, V>
 where
@@ -13,6 +15,7 @@ where
     embedder: Arc<dyn Embedder>,
     llm_client: Arc<L>,
     vector_store: Arc<V>,
+    conversation_repository: Arc<dyn ConversationRepository>,
     top_k: usize,
     similarity_threshold: f32,
     max_context_tokens: usize,
@@ -24,10 +27,12 @@ where
     L: LlmClient,
     V: VectorStore,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         embedder: Arc<dyn Embedder>,
         llm_client: Arc<L>,
         vector_store: Arc<V>,
+        conversation_repository: Arc<dyn ConversationRepository>,
         top_k: usize,
         similarity_threshold: f32,
         max_context_tokens: usize,
@@ -37,6 +42,7 @@ where
             embedder,
             llm_client,
             vector_store,
+            conversation_repository,
             top_k,
             similarity_threshold,
             max_context_tokens,
@@ -44,8 +50,15 @@ where
         }
     }
 
-    #[tracing::instrument(skip(self, question), fields(retrieved_chunks_count, similarity_score))]
-    pub async fn query(&self, question: &str) -> Result<QueryResponse, RetrievalError> {
+    #[tracing::instrument(
+        skip(self, question, conversation_id),
+        fields(retrieved_chunks_count, similarity_score)
+    )]
+    pub async fn query(
+        &self,
+        question: &str,
+        conversation_id: Option<ConversationId>,
+    ) -> Result<QueryResponse, RetrievalError> {
         let query_embedding = self
             .embedder
             .embed(question)
@@ -111,6 +124,20 @@ where
             .await
             .map_err(RetrievalError::Completion)?;
 
+        if let Some(conv_id) = conversation_id {
+            let user_message = Message::new(conv_id, MessageRole::User, question.to_string());
+            self.conversation_repository
+                .append_message(&user_message)
+                .await
+                .map_err(RetrievalError::Repository)?;
+
+            let assistant_message = Message::new(conv_id, MessageRole::Assistant, answer.clone());
+            self.conversation_repository
+                .append_message(&assistant_message)
+                .await
+                .map_err(RetrievalError::Repository)?;
+        }
+
         let sources = trimmed_chunks
             .into_iter()
             .map(|r| SourceChunk {
@@ -145,4 +172,6 @@ pub enum RetrievalError {
     Search(#[from] VectorStoreError),
     #[error("completion: {0}")]
     Completion(LlmClientError),
+    #[error("repository: {0}")]
+    Repository(RepositoryError),
 }

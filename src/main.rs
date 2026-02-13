@@ -6,12 +6,16 @@ use config::Environment as EnvironmentSource;
 use config::{Config, File};
 use tokio::net::TcpListener;
 
-use sandakan::application::ports::{CollectionConfig, FileLoader, VectorStore};
+use sandakan::application::ports::{
+    CollectionConfig, ConversationRepository, FileLoader, JobRepository, VectorStore,
+};
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::llm::{EmbedderFactory, OpenAiClient};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
-use sandakan::infrastructure::persistence::QdrantAdapter;
+use sandakan::infrastructure::persistence::{
+    PgConversationRepository, PgJobRepository, QdrantAdapter, create_pool,
+};
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
 };
@@ -43,6 +47,22 @@ async fn main() -> anyhow::Result<()> {
     init_tracing(tracing_config, settings.server.port);
 
     tracing::info!("Application starting in {} mode", environment);
+
+    let pg_pool = create_pool(&settings.database.url, settings.database.max_connections)
+        .await
+        .expect("Failed to create PostgreSQL connection pool");
+
+    if settings.database.run_migrations {
+        sqlx::migrate!()
+            .run(&pg_pool)
+            .await
+            .expect("Failed to run database migrations");
+        tracing::info!("Database migrations completed");
+    }
+
+    let job_repository: Arc<dyn JobRepository> = Arc::new(PgJobRepository::new(pg_pool.clone()));
+    let conversation_repository: Arc<dyn ConversationRepository> =
+        Arc::new(PgConversationRepository::new(pg_pool.clone()));
 
     let pdf_adapter: Arc<dyn FileLoader> = Arc::new(PdfAdapter::new());
     let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
@@ -113,12 +133,14 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
+        Arc::clone(&job_repository),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
+        Arc::clone(&conversation_repository),
         settings.rag.top_k,
         settings.rag.similarity_threshold,
         settings.rag.max_context_tokens,

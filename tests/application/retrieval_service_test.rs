@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use sandakan::application::ports::{
-    CollectionConfig, Embedder, EmbedderError, LlmClient, LlmClientError, SearchResult,
-    VectorStore, VectorStoreError,
+    CollectionConfig, ConversationRepository, Embedder, EmbedderError, LlmClient, LlmClientError,
+    RepositoryError, SearchResult, VectorStore, VectorStoreError,
 };
 use sandakan::application::services::RetrievalService;
-use sandakan::domain::{Chunk, ChunkId, DocumentId, Embedding};
+use sandakan::domain::{
+    Chunk, ChunkId, Conversation, ConversationId, DocumentId, Embedding, Message,
+};
 
 const TEST_TOP_K: usize = 5;
 const TEST_SIMILARITY_THRESHOLD: f32 = 0.7;
@@ -274,6 +276,41 @@ impl VectorStore for MockVectorStoreBoundaryScore {
     }
 }
 
+struct MockConversationRepository;
+
+#[async_trait::async_trait]
+impl ConversationRepository for MockConversationRepository {
+    async fn create_conversation(
+        &self,
+        _conversation: &Conversation,
+    ) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_conversation(
+        &self,
+        _id: ConversationId,
+    ) -> Result<Option<Conversation>, RepositoryError> {
+        Ok(None)
+    }
+
+    async fn append_message(&self, _message: &Message) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
+    async fn get_messages(
+        &self,
+        _conversation_id: ConversationId,
+        _limit: usize,
+    ) -> Result<Vec<Message>, RepositoryError> {
+        Ok(vec![])
+    }
+}
+
+fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
+    Arc::new(MockConversationRepository)
+}
+
 #[tokio::test]
 async fn given_high_similarity_results_when_querying_then_returns_llm_answer() {
     let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
@@ -284,13 +321,14 @@ async fn given_high_similarity_results_when_querying_then_returns_llm_answer() {
         embedder,
         llm_client,
         vector_store,
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question").await.unwrap();
+    let result = service.query("test question", None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert!(!result.sources.is_empty());
@@ -306,13 +344,14 @@ async fn given_low_similarity_results_when_querying_then_returns_fallback() {
         embedder,
         llm_client,
         vector_store,
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question").await.unwrap();
+    let result = service.query("test question", None).await.unwrap();
 
     assert_eq!(result.answer, TEST_FALLBACK_MESSAGE);
     assert!(result.sources.is_empty());
@@ -328,13 +367,14 @@ async fn given_no_search_results_when_querying_then_returns_fallback() {
         embedder,
         llm_client,
         vector_store,
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question").await.unwrap();
+    let result = service.query("test question", None).await.unwrap();
 
     assert_eq!(result.answer, TEST_FALLBACK_MESSAGE);
     assert!(result.sources.is_empty());
@@ -350,13 +390,14 @@ async fn given_many_chunks_exceeding_budget_when_querying_then_context_is_trimme
         embedder,
         llm_client,
         vector_store,
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question").await.unwrap();
+    let result = service.query("test question", None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert!(!result.sources.is_empty());
@@ -372,13 +413,14 @@ async fn given_threshold_boundary_score_when_querying_then_includes_exact_match(
         embedder,
         llm_client,
         vector_store,
+        mock_conversation_repository(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question").await.unwrap();
+    let result = service.query("test question", None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert_eq!(result.sources.len(), 1);

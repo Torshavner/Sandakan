@@ -59,7 +59,7 @@ where
             .into_response();
     }
 
-    match state.retrieval_service.query(&user_message).await {
+    match state.retrieval_service.query(&user_message, None).await {
         Ok(response) => {
             tracing::info!("Chat completion successful");
             let chat_response = ChatCompletionResponse::new(request.model, response.answer);
