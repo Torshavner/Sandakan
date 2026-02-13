@@ -1,3 +1,4 @@
+mod application;
 mod domain;
 mod infrastructure;
 
@@ -18,6 +19,9 @@ use sandakan::presentation::{AppState, ScaffoldConfig, create_router};
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
 const TEST_TOP_K: usize = 5;
+const TEST_SIMILARITY_THRESHOLD: f32 = 0.7;
+const TEST_MAX_CONTEXT_TOKENS: usize = 3072;
+const TEST_FALLBACK_MESSAGE: &str = "I cannot answer this based on the available lecture notes.";
 
 struct MockFileLoader;
 
@@ -101,6 +105,53 @@ impl VectorStore for MockVectorStore {
     }
 }
 
+struct MockVectorStoreLowScore;
+
+#[async_trait::async_trait]
+impl VectorStore for MockVectorStoreLowScore {
+    async fn create_collection(
+        &self,
+        _config: &CollectionConfig,
+    ) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
+        Ok(Some(384))
+    }
+
+    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+
+    async fn upsert(
+        &self,
+        _chunks: &[Chunk],
+        _embeddings: &[Embedding],
+    ) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+
+    async fn search(
+        &self,
+        _embedding: &Embedding,
+        _top_k: usize,
+    ) -> Result<Vec<SearchResult>, VectorStoreError> {
+        Ok(vec![SearchResult {
+            chunk: Chunk::new("test chunk".to_string(), DocumentId::new(), Some(1), 0),
+            score: 0.3,
+        }])
+    }
+
+    async fn delete(&self, _chunk_ids: &[ChunkId]) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+}
+
 fn create_test_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -125,6 +176,9 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         TEST_TOP_K,
+        TEST_SIMILARITY_THRESHOLD,
+        TEST_MAX_CONTEXT_TOKENS,
+        TEST_FALLBACK_MESSAGE.to_string(),
     ));
 
     let state = AppState {
@@ -163,6 +217,9 @@ fn create_scaffold_app() -> axum::Router {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         TEST_TOP_K,
+        TEST_SIMILARITY_THRESHOLD,
+        TEST_MAX_CONTEXT_TOKENS,
+        TEST_FALLBACK_MESSAGE.to_string(),
     ));
 
     let state = AppState {
@@ -441,4 +498,75 @@ async fn given_scaffold_mode_with_empty_message_when_chat_then_returns_bad_reque
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
+    use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
+
+    let file_loader = Arc::new(MockFileLoader);
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
+    let llm_client = Arc::new(MockLlmClient);
+    let vector_store = Arc::new(MockVectorStoreLowScore);
+    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
+
+    let ingestion_service = Arc::new(IngestionService::new(
+        Arc::clone(&file_loader),
+        Arc::clone(&embedder),
+        Arc::clone(&vector_store),
+        text_splitter,
+    ));
+
+    let retrieval_service = Arc::new(RetrievalService::new(
+        Arc::clone(&embedder),
+        Arc::clone(&llm_client),
+        Arc::clone(&vector_store),
+        TEST_TOP_K,
+        TEST_SIMILARITY_THRESHOLD,
+        TEST_MAX_CONTEXT_TOKENS,
+        TEST_FALLBACK_MESSAGE.to_string(),
+    ));
+
+    let state = AppState {
+        ingestion_service,
+        retrieval_service,
+        scaffold_config: ScaffoldConfig {
+            enabled: false,
+            mock_response_delay_ms: 0,
+        },
+    };
+
+    let app = create_router(state);
+
+    let request_body = r#"{
+        "model": "rag-pipeline",
+        "messages": [
+            {"role": "user", "content": "What is RAG?"}
+        ]
+    }"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(request_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let content = json["choices"][0]["message"]["content"].as_str().unwrap();
+    assert_eq!(content, TEST_FALLBACK_MESSAGE);
 }
