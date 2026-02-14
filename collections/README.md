@@ -35,9 +35,15 @@ hurl --very-verbose --variable base_url=http://127.0.0.1:3000 --file-root collec
 | `chat-completions.hurl` | `POST /v1/chat/completions`, `/api/chat/completions` | OpenAI-compatible chat (non-streaming) |
 | `chat-streaming.hurl` | `POST /v1/chat/completions` | SSE streaming chat |
 | `e2e-ingest-and-query.hurl` | All of the above | Full flow: health → ingest → query → chat |
+| `ingest-audio.hurl` | `POST /api/v1/ingest` | Audio file upload (multipart) |
+| `ingest-video.hurl` | `POST /api/v1/ingest` | MP4 video upload (multipart) |
+| `job-status.hurl` | `POST /api/v1/ingest`, `GET /api/v1/jobs/:id` | Ingest then poll job status |
+| `e2e-audio-ingest-and-query.hurl` | All of the above | Full audio flow: health → ingest audio → poll job → query → chat |
 | `error-cases.hurl` | Various | Invalid requests and error responses |
 
 ## Test Fixtures
 
 - `sample-rag-docs.pdf` — Small PDF with RAG pipeline documentation
 - `sample-notes.txt` — Plain text lecture notes about RAG
+- `sample-audio.mp3` — Short audio clip for transcription testing (provide your own)
+- `sample-video.mp4` — Short MP4 video for video ingestion testing (provide your own)

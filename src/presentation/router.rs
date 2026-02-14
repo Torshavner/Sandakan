@@ -9,8 +9,8 @@ use tracing::Level;
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::infrastructure::observability::request_id_middleware;
 use crate::presentation::handlers::{
-    chat_completions_handler, health_handler, ingest_handler, models_handler, query_handler,
-    scaffold_chat_handler,
+    chat_completions_handler, health_handler, ingest_handler, job_status_handler, models_handler,
+    query_handler, scaffold_chat_handler,
 };
 use crate::presentation::state::AppState;
 
@@ -41,6 +41,10 @@ where
         .route("/health", get(health_handler))
         .route("/api/v1/ingest", post(ingest_handler::<F, L, V, T>))
         .route("/api/v1/query", post(query_handler::<F, L, V, T>))
+        .route(
+            "/api/v1/jobs/{job_id}",
+            get(job_status_handler::<F, L, V, T>),
+        )
         .route("/v1/models", get(models_handler))
         .route("/api/models", get(models_handler));
 

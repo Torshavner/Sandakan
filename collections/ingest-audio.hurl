@@ -1,9 +1,10 @@
-# Ingest Plain Text
-# Uploads a plain text document for ingestion.
+# Ingest Audio
+# Uploads an audio file for transcription and ingestion into the RAG pipeline.
+# The API accepts the file and returns 202 with document_id and job_id.
 
 POST {{base_url}}/api/v1/ingest
 [MultipartFormData]
-file: file,sample-notes.txt; text/plain
+file: file,sample-audio.mp3; audio/mpeg
 HTTP 202
 [Captures]
 document_id: jsonpath "$.document_id"

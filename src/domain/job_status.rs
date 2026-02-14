@@ -5,6 +5,9 @@ use std::str::FromStr;
 pub enum JobStatus {
     Queued,
     Processing,
+    MediaExtraction,
+    Transcribing,
+    Embedding,
     Completed,
     Failed,
 }
@@ -14,6 +17,9 @@ impl JobStatus {
         match self {
             JobStatus::Queued => "QUEUED",
             JobStatus::Processing => "PROCESSING",
+            JobStatus::MediaExtraction => "MEDIA_EXTRACTION",
+            JobStatus::Transcribing => "TRANSCRIBING",
+            JobStatus::Embedding => "EMBEDDING",
             JobStatus::Completed => "COMPLETED",
             JobStatus::Failed => "FAILED",
         }
@@ -27,6 +33,9 @@ impl FromStr for JobStatus {
         match s {
             "QUEUED" => Ok(JobStatus::Queued),
             "PROCESSING" => Ok(JobStatus::Processing),
+            "MEDIA_EXTRACTION" => Ok(JobStatus::MediaExtraction),
+            "TRANSCRIBING" => Ok(JobStatus::Transcribing),
+            "EMBEDDING" => Ok(JobStatus::Embedding),
             "COMPLETED" => Ok(JobStatus::Completed),
             "FAILED" => Ok(JobStatus::Failed),
             _ => Err(format!("Invalid job status: {}", s)),
