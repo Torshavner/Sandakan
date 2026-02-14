@@ -1,0 +1,18 @@
+Lecture Notes: Introduction to Retrieval-Augmented Generation
+
+RAG combines the power of large language models with external knowledge retrieval.
+Instead of relying solely on parametric knowledge, RAG systems retrieve relevant
+documents from a vector store and use them as context for generating answers.
+
+Key Components:
+1. Document Ingestion - Extract text from PDFs, split into chunks, generate embeddings
+2. Vector Store - Store embeddings in a database like Qdrant for fast similarity search
+3. Retrieval - Given a user query, find the most relevant chunks via cosine similarity
+4. Generation - Feed retrieved context to an LLM to produce grounded answers
+
+Production Best Practices:
+- Use semantic chunking to preserve meaning boundaries
+- Set a similarity threshold to filter low-quality matches
+- Implement token budget management to stay within context limits
+- Monitor retrieval quality with relevance scores
+- Use conversation history for multi-turn interactions

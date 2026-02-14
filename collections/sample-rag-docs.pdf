@@ -1,0 +1,95 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 1442 >>
+stream
+BT
+/F1 10 Tf
+72 750 Td
+(Sandakan RAG Pipeline Documentation) Tj
+-72 -14 Td
+72 736 Td
+() Tj
+-72 -14 Td
+72 722 Td
+(Chapter 1: Overview) Tj
+-72 -14 Td
+72 708 Td
+(The Sandakan RAG pipeline is a Rust-based system for document ingestion and retrieval-augmented generation.) Tj
+-72 -14 Td
+72 694 Td
+(It supports PDF and text file ingestion, vector embedding, and semantic search.) Tj
+-72 -14 Td
+72 680 Td
+() Tj
+-72 -14 Td
+72 666 Td
+(Chapter 2: Architecture  ) Tj
+-72 -14 Td
+72 652 Td
+(The system follows hexagonal architecture with four layers:) Tj
+-72 -14 Td
+72 638 Td
+(1. Domain layer - core entities like Chunk, Document, Embedding) Tj
+-72 -14 Td
+72 624 Td
+(2. Application layer - business logic and port definitions) Tj
+-72 -14 Td
+72 610 Td
+(3. Infrastructure layer - concrete implementations for Qdrant, PostgreSQL, OpenAI) Tj
+-72 -14 Td
+72 596 Td
+(4. Presentation layer - HTTP API with Axum web framework) Tj
+-72 -14 Td
+72 582 Td
+() Tj
+-72 -14 Td
+72 568 Td
+(Chapter 3: API Endpoints) Tj
+-72 -14 Td
+72 554 Td
+(The main endpoints are:) Tj
+-72 -14 Td
+72 540 Td
+(- POST /api/v1/ingest - Upload documents for processing) Tj
+-72 -14 Td
+72 526 Td
+(- POST /api/v1/query - Ask questions about ingested documents  ) Tj
+-72 -14 Td
+72 512 Td
+(- POST /v1/chat/completions - OpenAI-compatible chat interface) Tj
+-72 -14 Td
+72 498 Td
+(- GET /health - Health check endpoint) Tj
+-72 -14 Td
+72 484 Td
+(- GET /v1/models - List available models) Tj
+-72 -14 Td
+ET
+
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000001679 00000 n 
+0000000115 00000 n 
+0000000185 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1805
+%%EOF
