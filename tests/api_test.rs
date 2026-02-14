@@ -13,7 +13,7 @@ use sandakan::application::ports::{
     JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, VectorStore,
     VectorStoreError,
 };
-use sandakan::application::services::{IngestionService, RetrievalService};
+use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
 use sandakan::domain::{
     Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
     JobStatus, Message,
@@ -22,6 +22,7 @@ use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
     EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
+    TranscriptionProviderSetting, VideoExtractionSettings,
 };
 use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
 
@@ -259,6 +260,11 @@ fn test_settings() -> Settings {
                 enabled: true,
                 max_file_size_mb: 100,
                 whisper_model: "base".to_string(),
+                provider: TranscriptionProviderSetting::Local,
+            },
+            video: VideoExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 500,
             },
         },
         rag: RagSettings {
@@ -305,6 +311,11 @@ fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
     Arc::new(MockConversationRepository)
 }
 
+fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
+    let (sender, _receiver) = tokio::sync::mpsc::channel(16);
+    sender
+}
+
 fn create_test_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -340,6 +351,8 @@ fn create_test_app() -> axum::Router {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: mock_job_repository(),
+        ingestion_sender: create_ingestion_sender(),
         settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: false,
@@ -385,6 +398,8 @@ fn create_scaffold_app() -> axum::Router {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: mock_job_repository(),
+        ingestion_sender: create_ingestion_sender(),
         settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: true,
@@ -697,6 +712,8 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: mock_job_repository(),
+        ingestion_sender: create_ingestion_sender(),
         settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: false,
@@ -734,4 +751,38 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
 
     let content = json["choices"][0]["message"]["content"].as_str().unwrap();
     assert_eq!(content, TEST_FALLBACK_MESSAGE);
+}
+
+#[tokio::test]
+async fn given_invalid_uuid_when_job_status_then_returns_bad_request() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/jobs/not-a-uuid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn given_nonexistent_job_when_job_status_then_returns_not_found() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/jobs/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

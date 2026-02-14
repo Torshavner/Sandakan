@@ -12,6 +12,7 @@ pub struct Document {
 pub enum ContentType {
     Pdf,
     Audio,
+    Video,
     Text,
 }
 
@@ -20,6 +21,7 @@ impl ContentType {
         match mime {
             "application/pdf" => Some(Self::Pdf),
             m if m.starts_with("audio/") => Some(Self::Audio),
+            m if m.starts_with("video/") => Some(Self::Video),
             "text/plain" => Some(Self::Text),
             _ => None,
         }
@@ -29,6 +31,7 @@ impl ContentType {
         match self {
             Self::Pdf => "application/pdf",
             Self::Audio => "audio/mpeg",
+            Self::Video => "video/mp4",
             Self::Text => "text/plain",
         }
     }

@@ -85,6 +85,7 @@ pub struct LoggingSettings {
 pub struct ExtractionSettings {
     pub pdf: PdfExtractionSettings,
     pub audio: AudioExtractionSettings,
+    pub video: VideoExtractionSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +99,26 @@ pub struct AudioExtractionSettings {
     pub enabled: bool,
     pub max_file_size_mb: usize,
     pub whisper_model: String,
+    #[serde(default = "default_transcription_provider")]
+    pub provider: TranscriptionProviderSetting,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionProviderSetting {
+    Local,
+    #[serde(rename = "openai")]
+    OpenAi,
+}
+
+fn default_transcription_provider() -> TranscriptionProviderSetting {
+    TranscriptionProviderSetting::Local
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoExtractionSettings {
+    pub enabled: bool,
+    pub max_file_size_mb: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

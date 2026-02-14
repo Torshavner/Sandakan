@@ -10,6 +10,7 @@ use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
     JobRepository, LlmClient, RepositoryError, SearchResult, VectorStore, VectorStoreError,
 };
+use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::{
     Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
@@ -21,6 +22,7 @@ use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
     EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
+    TranscriptionProviderSetting, VideoExtractionSettings,
 };
 use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
 
@@ -217,6 +219,11 @@ fn test_settings() -> Settings {
                 enabled: true,
                 max_file_size_mb: 100,
                 whisper_model: "base".to_string(),
+                provider: TranscriptionProviderSetting::Local,
+            },
+            video: VideoExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 500,
             },
         },
         rag: RagSettings {
@@ -260,10 +267,15 @@ fn create_ollama_test_app() -> axum::Router {
         "I cannot answer this.".to_string(),
     ));
 
+    let (ingestion_sender, _ingestion_receiver) =
+        tokio::sync::mpsc::channel::<IngestionMessage>(16);
+
     let state = AppState {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
+        ingestion_sender,
         settings: test_settings(),
         scaffold_config: ScaffoldConfig {
             enabled: false,

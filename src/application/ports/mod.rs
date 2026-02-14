@@ -10,6 +10,7 @@ mod payload_index;
 mod repository_error;
 mod search_result;
 mod text_splitter;
+mod transcription_engine;
 mod vector_store;
 mod vector_store_error;
 
@@ -25,5 +26,6 @@ pub use payload_index::PayloadIndex;
 pub use repository_error::RepositoryError;
 pub use search_result::SearchResult;
 pub use text_splitter::{TextSplitter, TextSplitterError};
+pub use transcription_engine::{TranscriptionEngine, TranscriptionError};
 pub use vector_store::VectorStore;
 pub use vector_store_error::VectorStoreError;

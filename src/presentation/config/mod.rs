@@ -8,4 +8,5 @@ pub use settings::{
     AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
     EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, Settings,
+    TranscriptionProviderSetting, VideoExtractionSettings,
 };

@@ -5,12 +5,14 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
-use crate::domain::ContentType;
+use crate::application::services::IngestionMessage;
+use crate::domain::{ContentType, Document, Job};
 use crate::presentation::state::AppState;
 
 #[derive(Serialize)]
 pub struct IngestResponse {
     pub document_id: String,
+    pub job_id: String,
     pub message: String,
 }
 
@@ -89,35 +91,53 @@ where
 
     tracing::debug!(bytes = data.len(), "File data received");
 
-    match state
-        .ingestion_service
-        .ingest(&data, filename.clone(), content_type)
-        .await
-    {
-        Ok(doc_id) => {
-            tracing::info!(
-                document_id = %doc_id.as_uuid(),
-                filename = %filename,
-                "Document ingestion started"
-            );
-            (
-                StatusCode::ACCEPTED,
-                Json(IngestResponse {
-                    document_id: doc_id.as_uuid().to_string(),
-                    message: "Document ingestion started".to_string(),
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, filename = %filename, "Ingestion failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Ingestion failed: {}", e),
-                }),
-            )
-                .into_response()
-        }
+    let document = Document::new(filename.clone(), content_type, data.len() as u64);
+    let doc_id = document.id;
+    let job = Job::new(Some(doc_id), "document_ingestion".to_string());
+    let job_id = job.id;
+
+    if let Err(e) = state.job_repository.create(&job).await {
+        tracing::error!(error = %e, "Failed to create job record");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create job: {}", e),
+            }),
+        )
+            .into_response();
     }
+
+    let msg = IngestionMessage {
+        job_id,
+        document,
+        data: data.to_vec(),
+    };
+
+    if let Err(e) = state.ingestion_sender.send(msg).await {
+        tracing::error!(error = %e, "Failed to enqueue ingestion job");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Ingestion queue full or worker unavailable".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    tracing::info!(
+        job_id = %job_id.as_uuid(),
+        document_id = %doc_id.as_uuid(),
+        filename = %filename,
+        "Document ingestion job enqueued"
+    );
+
+    (
+        StatusCode::ACCEPTED,
+        Json(IngestResponse {
+            document_id: doc_id.as_uuid().to_string(),
+            job_id: job_id.as_uuid().to_string(),
+            message: "Document ingestion started".to_string(),
+        }),
+    )
+        .into_response()
 }
