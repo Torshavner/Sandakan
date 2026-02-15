@@ -6,7 +6,7 @@ use crate::application::ports::{
     ConversationRepository, FileLoader, JobRepository, LlmClient, TextSplitter, VectorStore,
 };
 use crate::application::services::{IngestionMessage, IngestionService, RetrievalService};
-use crate::presentation::config::{ScaffoldConfig, Settings};
+use crate::presentation::config::{Settings};
 
 pub struct AppState<F, L, V, T: ?Sized>
 where
@@ -21,7 +21,6 @@ where
     pub job_repository: Arc<dyn JobRepository>,
     pub ingestion_sender: mpsc::Sender<IngestionMessage>,
     pub settings: Settings,
-    pub scaffold_config: ScaffoldConfig,
 }
 
 impl<F, L, V, T: ?Sized> Clone for AppState<F, L, V, T>
@@ -39,7 +38,6 @@ where
             job_repository: Arc::clone(&self.job_repository),
             ingestion_sender: self.ingestion_sender.clone(),
             settings: self.settings.clone(),
-            scaffold_config: self.scaffold_config.clone(),
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore
 use crate::infrastructure::observability::request_id_middleware;
 use crate::presentation::handlers::{
     chat_completions_handler, health_handler, ingest_handler, job_status_handler, models_handler,
-    query_handler, scaffold_chat_handler,
+    query_handler,
 };
 use crate::presentation::state::AppState;
 
@@ -30,12 +30,6 @@ where
         .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
-    let scaffold_enabled = state.scaffold_config.enabled;
-
-    if scaffold_enabled {
-        tracing::info!("Scaffold mode enabled - using echo responses");
-    }
-
     let mut router = Router::new()
         .route("/openapi.json", get(serve_openapi_spec))
         .route("/health", get(health_handler))
@@ -48,27 +42,15 @@ where
         .route("/v1/models", get(models_handler))
         .route("/api/models", get(models_handler));
 
-    router = if scaffold_enabled {
-        router
-            .route(
-                "/v1/chat/completions",
-                post(scaffold_chat_handler::<F, L, V, T>),
-            )
-            .route(
-                "/api/chat/completions",
-                post(scaffold_chat_handler::<F, L, V, T>),
-            )
-    } else {
-        router
-            .route(
-                "/v1/chat/completions",
-                post(chat_completions_handler::<F, L, V, T>),
-            )
-            .route(
-                "/api/chat/completions",
-                post(chat_completions_handler::<F, L, V, T>),
-            )
-    };
+    router = router
+        .route(
+            "/v1/chat/completions",
+            post(chat_completions_handler::<F, L, V, T>),
+        )
+        .route(
+            "/api/chat/completions",
+            post(chat_completions_handler::<F, L, V, T>),
+        );
 
     router
         .layer(middleware::from_fn(request_id_middleware))

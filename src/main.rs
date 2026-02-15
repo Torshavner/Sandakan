@@ -21,7 +21,7 @@ use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
 };
 use sandakan::presentation::{
-    AppState, Environment, ScaffoldConfig, Settings, TranscriptionProviderSetting, create_router,
+    AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
 };
 
 const INGESTION_CHANNEL_CAPACITY: usize = 64;
@@ -130,16 +130,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let text_splitter = TextSplitterFactory::create(
-        settings.embeddings.strategy,
+        settings.chunking.strategy,
         settings.chunking.max_chunk_size,
         settings.chunking.overlap_tokens,
     );
 
-    // Transcription engine for audio processing
     let transcription_provider = match settings.extraction.audio.provider {
         TranscriptionProviderSetting::Local => TranscriptionProvider::Local,
         TranscriptionProviderSetting::OpenAi => TranscriptionProvider::OpenAi,
     };
+
     let transcription_engine = TranscriptionEngineFactory::create(
         transcription_provider,
         &settings.extraction.audio.whisper_model,
@@ -147,13 +147,13 @@ async fn main() -> anyhow::Result<()> {
         settings.llm.base_url.clone(),
     )
     .expect("Failed to initialize transcription engine");
+
     tracing::info!(
         provider = ?transcription_provider,
         model = %settings.extraction.audio.whisper_model,
         "Transcription engine initialized"
     );
 
-    // Background ingestion worker
     let (ingestion_sender, ingestion_receiver) =
         tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
 
@@ -198,7 +198,6 @@ async fn main() -> anyhow::Result<()> {
         job_repository,
         ingestion_sender,
         settings: settings.clone(),
-        scaffold_config: ScaffoldConfig::default(),
     };
 
     let router = create_router(state);

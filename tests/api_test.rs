@@ -20,11 +20,11 @@ use sandakan::domain::{
 };
 use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    ChunkingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
     TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -228,13 +228,13 @@ fn test_settings() -> Settings {
         embeddings: EmbeddingsSettings {
             provider: EmbeddingProvider::Local,
             model: "test-model".to_string(),
-            strategy: EmbeddingStrategy::Semantic,
             dimension: 384,
             chunk_overlap: 50,
         },
         chunking: ChunkingSettings {
             max_chunk_size: 512,
             overlap_tokens: 50,
+            strategy: ChunkingStrategy::Semantic,
         },
         llm: LlmSettings {
             provider: "openai".to_string(),
@@ -354,57 +354,6 @@ fn create_test_app() -> axum::Router {
         job_repository: mock_job_repository(),
         ingestion_sender: create_ingestion_sender(),
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
-    };
-
-    create_router(state)
-}
-
-fn create_scaffold_app() -> axum::Router {
-    use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
-
-    let file_loader = Arc::new(MockFileLoader);
-    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
-    let llm_client = Arc::new(MockLlmClient);
-    let vector_store = Arc::new(MockVectorStore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
-        TEST_CHUNK_SIZE,
-        TEST_CHUNK_OVERLAP,
-    ));
-
-    let ingestion_service = Arc::new(IngestionService::new(
-        Arc::clone(&file_loader),
-        Arc::clone(&embedder),
-        Arc::clone(&vector_store),
-        text_splitter,
-        mock_job_repository(),
-    ));
-
-    let retrieval_service = Arc::new(RetrievalService::new(
-        Arc::clone(&embedder),
-        Arc::clone(&llm_client),
-        Arc::clone(&vector_store),
-        mock_conversation_repository(),
-        TEST_TOP_K,
-        TEST_SIMILARITY_THRESHOLD,
-        TEST_MAX_CONTEXT_TOKENS,
-        TEST_FALLBACK_MESSAGE.to_string(),
-    ));
-
-    let state = AppState {
-        ingestion_service,
-        retrieval_service,
-        conversation_repository: Arc::new(MockConversationRepository),
-        job_repository: mock_job_repository(),
-        ingestion_sender: create_ingestion_sender(),
-        settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: true,
-            mock_response_delay_ms: 0,
-        },
     };
 
     create_router(state)
@@ -588,95 +537,6 @@ async fn given_request_with_id_when_any_endpoint_then_response_echoes_request_id
 }
 
 #[tokio::test]
-async fn given_scaffold_mode_when_chat_completions_then_echoes_message() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": [
-            {"role": "user", "content": "Test Connection"}
-        ]
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    let content = json["choices"][0]["message"]["content"].as_str().unwrap();
-    assert!(content.contains("Echo: Test Connection"));
-}
-
-#[tokio::test]
-async fn given_scaffold_mode_with_stream_when_chat_completions_then_returns_sse() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": [
-            {"role": "user", "content": "Hello"}
-        ],
-        "stream": true
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        "text/event-stream"
-    );
-}
-
-#[tokio::test]
-async fn given_scaffold_mode_with_empty_message_when_chat_then_returns_bad_request() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": []
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
 async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -715,10 +575,6 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         job_repository: mock_job_repository(),
         ingestion_sender: create_ingestion_sender(),
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
     };
 
     let app = create_router(state);

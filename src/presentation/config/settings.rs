@@ -29,7 +29,6 @@ pub struct QdrantSettings {
 pub struct EmbeddingsSettings {
     pub provider: EmbeddingProvider,
     pub model: String,
-    pub strategy: EmbeddingStrategy,
     pub dimension: usize,
     pub chunk_overlap: usize,
 }
@@ -44,7 +43,7 @@ pub enum EmbeddingProvider {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum EmbeddingStrategy {
+pub enum ChunkingStrategy {
     Semantic,
     Fixed,
 }
@@ -53,6 +52,7 @@ pub enum EmbeddingStrategy {
 pub struct ChunkingSettings {
     pub max_chunk_size: usize,
     pub overlap_tokens: usize,
+    pub strategy: ChunkingStrategy,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -4,7 +4,7 @@
 
 POST {{base_url}}/api/v1/ingest
 [MultipartFormData]
-file: file,sample-rag-docs.pdf; application/pdf
+file: file,data/db-for-gen-ai.pdf; application/pdf
 HTTP 202
 [Captures]
 document_id: jsonpath "$.document_id"

@@ -41,7 +41,12 @@ impl CandleWhisperEngine {
         let weights_path = repo.get("model.safetensors").map_err(|e| {
             TranscriptionError::ModelLoadFailed(format!("model.safetensors: {}", e))
         })?;
-        let mel_bytes_path = repo
+
+        let mel_repo = api.repo(Repo::new(
+            "FL33TW00D-HF/whisper-base".to_string(),
+            RepoType::Model,
+        ));
+        let mel_bytes_path = mel_repo
             .get("melfilters.bytes")
             .map_err(|e| TranscriptionError::ModelLoadFailed(format!("melfilters.bytes: {}", e)))?;
 

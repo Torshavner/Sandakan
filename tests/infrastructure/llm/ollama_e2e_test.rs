@@ -20,11 +20,11 @@ use sandakan::infrastructure::llm::create_streaming_llm_client;
 use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    ChunkingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
     TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const OLLAMA_MODEL: &str = "llama3.1";
@@ -196,13 +196,13 @@ fn test_settings() -> Settings {
         embeddings: EmbeddingsSettings {
             provider: EmbeddingProvider::Local,
             model: "test-model".to_string(),
-            strategy: EmbeddingStrategy::Semantic,
             dimension: 384,
             chunk_overlap: 50,
         },
         chunking: ChunkingSettings {
             max_chunk_size: 512,
             overlap_tokens: 50,
+            strategy: ChunkingStrategy::Semantic,
         },
         llm: ollama_llm_settings(),
         logging: LoggingSettings {
@@ -277,10 +277,6 @@ fn create_ollama_test_app() -> axum::Router {
         job_repository: Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
         ingestion_sender,
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
     };
 
     create_router(state)

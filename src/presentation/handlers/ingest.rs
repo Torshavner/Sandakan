@@ -9,6 +9,8 @@ use crate::application::services::IngestionMessage;
 use crate::domain::{ContentType, Document, Job};
 use crate::presentation::state::AppState;
 
+
+// TODO: Move those fields to the another file
 #[derive(Serialize)]
 pub struct IngestResponse {
     pub document_id: String,
