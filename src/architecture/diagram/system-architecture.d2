@@ -15,11 +15,31 @@ presentation: Presentation Layer {
     shape: hexagon
   }
 
-  cli: CLI Interface {
-    shape: hexagon
+  handlers: Handlers {
+    style.fill: "#bbdefb"
+
+    ingest: POST /api/v1/ingest\n(Multipart Upload) {
+      shape: rectangle
+    }
+
+    chat: POST /v1/chat/completions\n(SSE Streaming) {
+      shape: rectangle
+    }
+
+    query: POST /api/v1/query\n(RAG Query) {
+      shape: rectangle
+    }
+
+    jobs: "GET /api/v1/jobs/:id\n(Job Status)" {
+      shape: rectangle
+    }
   }
 
   main: main.rs\n(Composition Root) {
+    shape: rectangle
+  }
+
+  config: Settings\n(Typed Config) {
     shape: rectangle
   }
 }
@@ -28,20 +48,68 @@ presentation: Presentation Layer {
 infrastructure: Infrastructure Layer {
   style.fill: "#fff3e0"
 
-  qdrant: Qdrant Adapter\n(gRPC) {
-    shape: cylinder
+  persistence: Persistence {
+    style.fill: "#ffe0b2"
+
+    qdrant: Qdrant Adapter\n(gRPC) {
+      shape: cylinder
+    }
+
+    pgJob: PgJobRepository\n(sqlx) {
+      shape: cylinder
+    }
+
+    pgConv: PgConversationRepository\n(sqlx) {
+      shape: cylinder
+    }
   }
 
-  openai: OpenAI Client\n(Embeddings & Chat) {
-    shape: cloud
+  llm: LLM {
+    style.fill: "#ffe0b2"
+
+    streaming: StreamingLlmClient\n(reqwest + SSE) {
+      shape: cloud
+    }
+
+    openaiEmbed: OpenAiEmbedder\n(/v1/embeddings) {
+      shape: cloud
+    }
+
+    localEmbed: LocalCandleEmbedder\n(CPU Inference) {
+      shape: cloud
+    }
   }
 
-  pdf: PDF Extractor {
-    shape: document
+  audio: Audio {
+    style.fill: "#ffe0b2"
+
+    candleWhisper: CandleWhisperEngine\n(Local Whisper) {
+      shape: document
+    }
+
+    openaiWhisper: OpenAiWhisperEngine\n(API) {
+      shape: document
+    }
+
+    decoder: AudioDecoder\n(Symphonia + Rubato) {
+      shape: document
+    }
   }
 
-  whisper: Whisper\n(Audio Transcription) {
-    shape: document
+  textProc: Text Processing {
+    style.fill: "#ffe0b2"
+
+    fileLoader: CompositeFileLoader\n(PDF + Text) {
+      shape: document
+    }
+
+    semanticSplit: SemanticSplitter\n(Similarity-based) {
+      shape: document
+    }
+
+    fixedSplit: RecursiveCharacterSplitter\n(Token-based) {
+      shape: document
+    }
   }
 }
 
@@ -60,7 +128,27 @@ application: Application Layer {
       shape: diamond
     }
 
+    embedder: Embedder {
+      shape: diamond
+    }
+
     llmClient: LlmClient {
+      shape: diamond
+    }
+
+    textSplitter: TextSplitter {
+      shape: diamond
+    }
+
+    transcription: TranscriptionEngine {
+      shape: diamond
+    }
+
+    jobRepo: JobRepository {
+      shape: diamond
+    }
+
+    convRepo: ConversationRepository {
       shape: diamond
     }
   }
@@ -68,11 +156,19 @@ application: Application Layer {
   services: Services {
     style.fill: "#e1bee7"
 
-    ingestion: IngestionService\n(File → Vectors) {
+    ingestion: IngestionService\n(File -> Vectors) {
       shape: rectangle
     }
 
-    retrieval: RetrievalService\n(Query → Answer) {
+    worker: IngestionWorker\n(Async Background) {
+      shape: rectangle
+    }
+
+    retrieval: RetrievalService\n(Query -> Answer) {
+      shape: rectangle
+    }
+
+    tokenCounter: TokenCounter\n(tiktoken-rs) {
       shape: rectangle
     }
   }
@@ -85,11 +181,27 @@ domain: Domain Layer {
   entities: Entities {
     style.fill: "#c8e6c9"
 
-    chunk: Chunk\n(text, metadata, page) {
+    chunk: Chunk\n(ChunkId, DocumentId) {
       shape: oval
     }
 
-    document: Document {
+    document: Document\n(ContentType) {
+      shape: oval
+    }
+
+    job: Job\n(JobId, JobStatus) {
+      shape: oval
+    }
+
+    conversation: Conversation\n(ConversationId) {
+      shape: oval
+    }
+
+    message: Message\n(MessageId, MessageRole) {
+      shape: oval
+    }
+
+    embedding: Embedding\n(cosine similarity) {
       shape: oval
     }
   }
@@ -104,53 +216,105 @@ external: External Systems {
     style.stroke: "#d32f2f"
   }
 
-  openaiAPI: OpenAI API {
+  postgres: PostgreSQL\n(Jobs + Conversations) {
+    shape: cylinder
+    style.stroke: "#d32f2f"
+  }
+
+  openaiAPI: OpenAI API\n(Chat + Embeddings + Whisper) {
+    shape: cloud
+    style.stroke: "#d32f2f"
+  }
+
+  azureAPI: Azure OpenAI\n(Chat Completions) {
+    shape: cloud
+    style.stroke: "#d32f2f"
+  }
+
+  hfHub: Hugging Face Hub\n(Model Downloads) {
     shape: cloud
     style.stroke: "#d32f2f"
   }
 }
 
-# Connections - Presentation to Infrastructure
-presentation.api -> infrastructure.qdrant
-presentation.api -> infrastructure.openai
-presentation.cli -> infrastructure.pdf
-presentation.cli -> infrastructure.whisper
+# Connections - Presentation to Handlers
+presentation.api -> presentation.handlers.ingest
+presentation.api -> presentation.handlers.chat
+presentation.api -> presentation.handlers.query
+presentation.api -> presentation.handlers.jobs
 
-# Connections - Infrastructure to Application Ports
-infrastructure.qdrant -> application.ports.vectorStore: implements
-infrastructure.openai -> application.ports.llmClient: implements
-infrastructure.pdf -> application.ports.fileLoader: implements
-infrastructure.whisper -> application.ports.fileLoader: implements
+# Connections - Infrastructure implements Application Ports
+infrastructure.persistence.qdrant -> application.ports.vectorStore: implements
+infrastructure.persistence.pgJob -> application.ports.jobRepo: implements
+infrastructure.persistence.pgConv -> application.ports.convRepo: implements
+infrastructure.llm.streaming -> application.ports.llmClient: implements
+infrastructure.llm.openaiEmbed -> application.ports.embedder: implements
+infrastructure.llm.localEmbed -> application.ports.embedder: implements
+infrastructure.audio.candleWhisper -> application.ports.transcription: implements
+infrastructure.audio.openaiWhisper -> application.ports.transcription: implements
+infrastructure.textProc.fileLoader -> application.ports.fileLoader: implements
+infrastructure.textProc.semanticSplit -> application.ports.textSplitter: implements
+infrastructure.textProc.fixedSplit -> application.ports.textSplitter: implements
 
 # Connections - Application Services to Ports
 application.services.ingestion -> application.ports.fileLoader: uses
 application.services.ingestion -> application.ports.vectorStore: uses
-application.services.ingestion -> application.ports.llmClient: uses
+application.services.ingestion -> application.ports.embedder: uses
+application.services.ingestion -> application.ports.textSplitter: uses
+
+application.services.worker -> application.ports.fileLoader: uses
+application.services.worker -> application.ports.vectorStore: uses
+application.services.worker -> application.ports.embedder: uses
+application.services.worker -> application.ports.textSplitter: uses
+application.services.worker -> application.ports.transcription: uses
+application.services.worker -> application.ports.jobRepo: uses
 
 application.services.retrieval -> application.ports.vectorStore: uses
 application.services.retrieval -> application.ports.llmClient: uses
+application.services.retrieval -> application.ports.embedder: uses
+application.services.retrieval -> application.ports.convRepo: uses
 
 # Connections - Services to Domain
 application.services.ingestion -> domain.entities.chunk: creates
+application.services.ingestion -> domain.entities.document: creates
+application.services.worker -> domain.entities.job: updates
 application.services.retrieval -> domain.entities.chunk: reads
+application.services.retrieval -> domain.entities.conversation: manages
+application.services.retrieval -> domain.entities.message: creates
 
 # Connections - Infrastructure to External Systems
-infrastructure.qdrant -> external.qdrantDB: gRPC
-infrastructure.openai -> external.openaiAPI: HTTP
+infrastructure.persistence.qdrant -> external.qdrantDB: gRPC
+infrastructure.persistence.pgJob -> external.postgres: sqlx
+infrastructure.persistence.pgConv -> external.postgres: sqlx
+infrastructure.llm.streaming -> external.openaiAPI: HTTP/SSE
+infrastructure.llm.streaming -> external.azureAPI: HTTP/SSE
+infrastructure.llm.openaiEmbed -> external.openaiAPI: HTTP
+infrastructure.audio.openaiWhisper -> external.openaiAPI: HTTP
+infrastructure.llm.localEmbed -> external.hfHub: model download
+infrastructure.audio.candleWhisper -> external.hfHub: model download
 
-# Data Flow Annotations (simplified for compactness)
+# Data Flow Annotations
 flows: Data Flows {
   near: bottom-left
   style.fill: "#fffef7"
 
-  ingestion: Ingestion:\nUpload → Extract → Chunk → Embed → Store {
+  ingestion: |md
+    **Ingestion:**
+    Upload -> Job(Queued) -> Async Worker
+    -> MediaExtraction -> Transcribe
+    -> Chunk -> Embed -> Store -> Completed
+  | {
     shape: text
-    style.font-size: 12
+    style.font-size: 11
   }
 
-  retrieval: Retrieval:\nQuery → Embed → Search → Augment → Generate {
+  retrieval: |md
+    **Retrieval:**
+    Query -> Embed -> Search(Top-K)
+    -> Token Budget -> Augment -> Stream/Generate
+  | {
     shape: text
-    style.font-size: 12
+    style.font-size: 11
   }
 }
 
@@ -159,7 +323,7 @@ techStack: Tech Stack {
   near: bottom-right
   style.fill: "#fafafa"
 
-  stack: "tokio • Qdrant • serde • tracing • candle" {
+  stack: "tokio . axum . sqlx . Qdrant . serde . tracing . candle . symphonia . reqwest" {
     shape: text
     style.font-size: 11
   }

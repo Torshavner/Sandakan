@@ -10,6 +10,7 @@ pub struct Settings {
     pub llm: LlmSettings,
     pub logging: LoggingSettings,
     pub extraction: ExtractionSettings,
+    pub storage: StorageSettings,
     pub rag: RagSettings,
 }
 
@@ -29,7 +30,6 @@ pub struct QdrantSettings {
 pub struct EmbeddingsSettings {
     pub provider: EmbeddingProvider,
     pub model: String,
-    pub strategy: EmbeddingStrategy,
     pub dimension: usize,
     pub chunk_overlap: usize,
 }
@@ -44,7 +44,7 @@ pub enum EmbeddingProvider {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum EmbeddingStrategy {
+pub enum ChunkingStrategy {
     Semantic,
     Fixed,
 }
@@ -53,6 +53,7 @@ pub enum EmbeddingStrategy {
 pub struct ChunkingSettings {
     pub max_chunk_size: usize,
     pub overlap_tokens: usize,
+    pub strategy: ChunkingStrategy,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +86,7 @@ pub struct LoggingSettings {
 pub struct ExtractionSettings {
     pub pdf: PdfExtractionSettings,
     pub audio: AudioExtractionSettings,
+    pub video: VideoExtractionSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +100,26 @@ pub struct AudioExtractionSettings {
     pub enabled: bool,
     pub max_file_size_mb: usize,
     pub whisper_model: String,
+    #[serde(default = "default_transcription_provider")]
+    pub provider: TranscriptionProviderSetting,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionProviderSetting {
+    Local,
+    #[serde(rename = "openai")]
+    OpenAi,
+}
+
+fn default_transcription_provider() -> TranscriptionProviderSetting {
+    TranscriptionProviderSetting::Local
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoExtractionSettings {
+    pub enabled: bool,
+    pub max_file_size_mb: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,4 +136,24 @@ pub struct DatabaseSettings {
     pub url: String,
     pub max_connections: u32,
     pub run_migrations: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageSettings {
+    pub provider: StorageProviderSetting,
+    pub local_path: String,
+    pub max_upload_size_bytes: u64,
+    #[serde(default)]
+    pub azure_account: Option<String>,
+    #[serde(default)]
+    pub azure_access_key: Option<String>,
+    #[serde(default)]
+    pub azure_container: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageProviderSetting {
+    Local,
+    Azure,
 }

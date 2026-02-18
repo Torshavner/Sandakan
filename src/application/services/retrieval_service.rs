@@ -27,6 +27,7 @@ where
     L: LlmClient,
     V: VectorStore,
 {
+    // TODO: Fix this too many args
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         embedder: Arc<dyn Embedder>,

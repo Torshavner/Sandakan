@@ -17,3 +17,7 @@ target
 .vscode
 .idea
 .DS_Store
+
+data/
+uploads/
+test-uploads/

@@ -10,20 +10,21 @@ use tower::ServiceExt;
 
 use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, VectorStore,
-    VectorStoreError,
+    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, StagingStore,
+    StagingStoreError, VectorStore, VectorStoreError,
 };
-use sandakan::application::services::{IngestionService, RetrievalService};
+use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
 use sandakan::domain::{
     Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
     JobStatus, Message,
 };
 use sandakan::presentation::config::{
-    AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
-    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
+    AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
+    EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
+    StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -209,6 +210,39 @@ impl ConversationRepository for MockConversationRepository {
     }
 }
 
+struct MockStagingStore;
+
+#[async_trait::async_trait]
+impl StagingStore for MockStagingStore {
+    async fn store(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
+        _content_length: Option<u64>,
+    ) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+
+    async fn fetch(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+    ) -> Result<Vec<u8>, StagingStoreError> {
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
+        Ok(())
+    }
+
+    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+}
+
+fn mock_staging_store() -> Arc<dyn StagingStore> {
+    Arc::new(MockStagingStore)
+}
+
 fn test_settings() -> Settings {
     Settings {
         server: ServerSettings {
@@ -227,13 +261,13 @@ fn test_settings() -> Settings {
         embeddings: EmbeddingsSettings {
             provider: EmbeddingProvider::Local,
             model: "test-model".to_string(),
-            strategy: EmbeddingStrategy::Semantic,
             dimension: 384,
             chunk_overlap: 50,
         },
         chunking: ChunkingSettings {
             max_chunk_size: 512,
             overlap_tokens: 50,
+            strategy: ChunkingStrategy::Semantic,
         },
         llm: LlmSettings {
             provider: "openai".to_string(),
@@ -250,6 +284,14 @@ fn test_settings() -> Settings {
             enable_json: false,
             enable_udp: false,
         },
+        storage: StorageSettings {
+            provider: StorageProviderSetting::Local,
+            local_path: "./test-uploads".to_string(),
+            max_upload_size_bytes: 1073741824,
+            azure_account: None,
+            azure_access_key: None,
+            azure_container: None,
+        },
         extraction: ExtractionSettings {
             pdf: PdfExtractionSettings {
                 enabled: true,
@@ -259,6 +301,11 @@ fn test_settings() -> Settings {
                 enabled: true,
                 max_file_size_mb: 100,
                 whisper_model: "base".to_string(),
+                provider: TranscriptionProviderSetting::Local,
+            },
+            video: VideoExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 500,
             },
         },
         rag: RagSettings {
@@ -305,6 +352,14 @@ fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
     Arc::new(MockConversationRepository)
 }
 
+fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(async move {
+        while receiver.recv().await.is_some() {}
+    });
+    sender
+}
+
 fn create_test_app() -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -340,56 +395,10 @@ fn create_test_app() -> axum::Router {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: mock_job_repository(),
+        ingestion_sender: create_ingestion_sender(),
+        staging_store: mock_staging_store(),
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
-    };
-
-    create_router(state)
-}
-
-fn create_scaffold_app() -> axum::Router {
-    use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
-
-    let file_loader = Arc::new(MockFileLoader);
-    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
-    let llm_client = Arc::new(MockLlmClient);
-    let vector_store = Arc::new(MockVectorStore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
-        TEST_CHUNK_SIZE,
-        TEST_CHUNK_OVERLAP,
-    ));
-
-    let ingestion_service = Arc::new(IngestionService::new(
-        Arc::clone(&file_loader),
-        Arc::clone(&embedder),
-        Arc::clone(&vector_store),
-        text_splitter,
-        mock_job_repository(),
-    ));
-
-    let retrieval_service = Arc::new(RetrievalService::new(
-        Arc::clone(&embedder),
-        Arc::clone(&llm_client),
-        Arc::clone(&vector_store),
-        mock_conversation_repository(),
-        TEST_TOP_K,
-        TEST_SIMILARITY_THRESHOLD,
-        TEST_MAX_CONTEXT_TOKENS,
-        TEST_FALLBACK_MESSAGE.to_string(),
-    ));
-
-    let state = AppState {
-        ingestion_service,
-        retrieval_service,
-        conversation_repository: Arc::new(MockConversationRepository),
-        settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: true,
-            mock_response_delay_ms: 0,
-        },
     };
 
     create_router(state)
@@ -573,95 +582,6 @@ async fn given_request_with_id_when_any_endpoint_then_response_echoes_request_id
 }
 
 #[tokio::test]
-async fn given_scaffold_mode_when_chat_completions_then_echoes_message() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": [
-            {"role": "user", "content": "Test Connection"}
-        ]
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    let content = json["choices"][0]["message"]["content"].as_str().unwrap();
-    assert!(content.contains("Echo: Test Connection"));
-}
-
-#[tokio::test]
-async fn given_scaffold_mode_with_stream_when_chat_completions_then_returns_sse() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": [
-            {"role": "user", "content": "Hello"}
-        ],
-        "stream": true
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        "text/event-stream"
-    );
-}
-
-#[tokio::test]
-async fn given_scaffold_mode_with_empty_message_when_chat_then_returns_bad_request() {
-    let app = create_scaffold_app();
-
-    let request_body = r#"{
-        "model": "rag-pipeline",
-        "messages": []
-    }"#;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
 async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
@@ -697,11 +617,10 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: mock_job_repository(),
+        ingestion_sender: create_ingestion_sender(),
+        staging_store: mock_staging_store(),
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
     };
 
     let app = create_router(state);
@@ -734,4 +653,80 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
 
     let content = json["choices"][0]["message"]["content"].as_str().unwrap();
     assert_eq!(content, TEST_FALLBACK_MESSAGE);
+}
+
+#[tokio::test]
+async fn given_invalid_uuid_when_job_status_then_returns_bad_request() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/jobs/not-a-uuid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn given_nonexistent_job_when_job_status_then_returns_not_found() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/jobs/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn given_valid_reference_when_ingesting_then_returns_accepted() {
+    let app = create_test_app();
+
+    let body = r#"{"storage_path":"some/path/video.mp4","filename":"video.mp4","content_type":"video/mp4"}"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ingest-reference")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn given_unsupported_content_type_when_ingesting_reference_then_returns_415() {
+    let app = create_test_app();
+
+    let body = r#"{"storage_path":"some/path/file.xyz","filename":"file.xyz","content_type":"application/octet-stream"}"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ingest-reference")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }

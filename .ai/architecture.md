@@ -1,66 +1,87 @@
-## System Architecture: Rust RAG Pipeline
+# Architecture
 
-### 1. Design Philosophy
+## 1. High-Level Design Philosophy
 
-* **Architecture**: Clean / Hexagonal. Decouples core logic from external adapters (Qdrant, OpenAI).
-* **Type Safety**: Static typing prevents data ingestion/serialization errors.
-* **Concurrency**: `tokio` for async I/O; `rayon` for CPU-bound tasks (Whisper/Parsing).
-* **Modularity**: Interface-based design allows hot-swapping Vector DBs or LLMs.
+This architecture follows **Hexagonal (Ports & Adapters)** principles to ensure the AI agent can navigate, mock, and test components in isolation. It prioritizes **context window efficiency** by enforcing small, specialized files and a searchable domain graph.
 
-### 2. Dependency Mapping
+* **Core Principle:** Dependencies point inward (**L4 → L3 → L2 → L1**).
+* **AI Navigability:** Every domain module contains a `mod.rs` with a `/// @AI:` routing map.
+* **Concurrency:** Non-blocking async I/O via `tokio` with dedicated background workers for heavy lifting (Ingestion).
 
-* **Domain (L1)**: Internal structs (Chunk, Document). No external dependencies.
-* **Application (L2)**: Business logic and Ports (Traits). Defines system capabilities.
-* **Infrastructure (L3)**: Concrete Adapters. Implements Ports for Qdrant, OpenAI, Whisper, PDF.
-* **Presentation (L4)**: Composition root (`main.rs`), CLI, and REST API (Axum).
-* **Direction**: L4 -> L3 -> L2 -> L1 (Dependencies point inward only).
+---
 
-### 3. Component Specifications
+## 2. Layered Structure & Context Boundaries
 
-#### Layer 1 & 2: Core Logic
+To prevent "Context Collapse," the system is partitioned into four distinct layers. Layer logic and testing boundaries are strictly defined.
 
-* **domain/entities.rs**: Defines `Chunk` (text, metadata, page).
-* **application/ports/**: Abstract traits for `FileLoader`, `VectorStore`, `LlmClient`.
-* **application/services/**: `IngestionService` (File -> Vectors) and `RetrievalService` (Query -> Answer).
+### L1: Domain (The Core)
 
-#### Layer 3 & 4: Implementation
+* **Role:** Pure business logic and Value Objects. **Strictly No I/O.**
+* **Key Entities:** `Chunk`, `Document`, `Job`, `Conversation`, `Message`.
+* **Constraint:** Uses the **Newtype Pattern** (e.g., `struct ChunkId(Uuid)`) to prevent primitive obsession and ensure type-safe ID handling across the pipeline.
+* **Testing Bound:** Pure offline Unit tests inside `mod tests`.
 
-* **infrastructure/persistence**: Qdrant gRPC adapter; maps `Domain::Chunk` to `PointStruct`.
-* **infrastructure/llm**: OpenAI client for embeddings and completions.
-* **infrastructure/fs**: PDF text extraction and Whisper audio transcription.
-* **main.rs**: Orchestrates DI, initializes `tokio`, and binds routes.
+### L2: Application (The Orchestrator)
 
-### 4. Data Workflows
+* **Role:** Defines **Ports (Traits)** and Services.
+* **Ports:** `VectorStore`, `Embedder`, `LlmClient`, `TextSplitter`, `TranscriptionEngine`.
+* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `TokenCounter`.
+* **Testing Bound:** Offline Unit/Integration tests using hand-written, in-memory mocks/stubs. No heavy macro frameworks.
 
-#### Ingestion (Write Path)
+### L3: Infrastructure (The Adapters)
 
-* **Trigger**: API Upload (PDF/Audio).
-* **Extraction**: Async parallel text extraction via PDF/Whisper adapters.
-* **Processing**: Recursive text splitting into semantic chunks.
-* **Vectorization**: Batch embedding generation via LLM client.
-* **Storage**: Atomic upsert to Qdrant vector store.
+* **Role:** Concrete implementations of L2 Ports.
+* **Adapters:** `QdrantAdapter`, `PgRepository`, `OpenAiClient`, `CandleLocalInference`.
+* **Testing Bound:** E2E testing using `testcontainers` with dynamic port assignment. No mocked integration tests belong here.
 
-#### Retrieval (Read Path)
+### L4: Presentation (The Composition Root)
 
-* **Query**: Natural language input -> LLM Embedding.
-* **Search**: Vector similarity search (Top-K) in Qdrant.
-* **Augmentation**: Context construction from retrieved chunks + system prompt.
-* **Generation**: LLM chat completion -> Final response.
+* **Role:** Axum handlers, CLI entry points, and global `AppState`.
+* **Constraint:** Handlers are **Zero-DTO**. They only extract data, call an L2 Service, and map the response. DTOs must live in a separate `schema` or `contract` module.
 
-### 5. Technical Stack
+---
 
-| Component | Choice | Rationale |
+## 3. Data Workflows & Execution Boundaries
+
+The pipeline distinguishes between **Immediate API response** and **Deferred background processing** to maintain system responsiveness.
+
+### The Ingestion Pipeline (Write Path)
+
+1. **Entry:** `POST /api/v1/ingest` validates the multipart upload.
+2. **Handoff:** A `Job` is created in Postgres (Status: `Queued`).
+3. **Worker:** An `IngestionWorker` (Background Actor) consumes the task via `mpsc` channel.
+4. **Process:** Routing via `CompositeFileLoader` → `TextSplitter` → `Embedder` → `VectorStore`.
+
+### The Retrieval Pipeline (Read Path)
+
+1. **Search:** User query is converted to a vector.
+2. **Augmentation:** Context chunks are pulled from `VectorStore` based on similarity thresholds.
+3. **Generation:** Streamed tokens are returned via SSE (Server-Sent Events) using `tokio::select!` for keep-alive management.
+
+---
+
+## 4. Agentic Interaction Rules
+
+When modifying this architecture, the AI Agent must follow these state-management rules, cross-referencing Code and Test guidelines:
+
+| Action | Required Architectural Step |
+| --- | --- |
+| **New Domain Added** | Create folder, add `mod.rs`, and register in the `/// @AI:` routing table. |
+| **New Provider Added** | Implement the L2 Trait in L3 and update the corresponding `Factory`. |
+| **Navigating Large Files** | Respect the `// @AI-BYPASS-LENGTH` header for configurations; otherwise, adhere to the file size limits and refactor triggers defined in Code Guidelines. |
+| **Testing Intent** | Route test execution intents strictly by directory: `mod tests` (Unit), `tests/integration/` (Offline/Mocked API), `tests/e2e/` (Containers). |
+| **Deferred Work** | Ignore any roadmap items or tasks tagged with `[DEFERRED]` or `[IGNORE]`. |
+
+---
+
+## 5. Technical Stack Summary
+
+| Component | Technology | Intent |
 | --- | --- | --- |
-| Runtime | `tokio` | Standard for async I/O and concurrent API calls. |
-| Vector DB | Qdrant | Rust-native, high-performance, gRPC support. |
-| Serialization | `serde` | Zero-copy mapping between Domain and DB payloads. |
-| Observability | `tracing` | Context-aware logging for async call stacks. |
-| Inference | `candle` | Local ML (Whisper/Embeddings) without Python overhead. |
+| **Runtime** | `tokio` | Async execution & task spawning. |
+| **API** | `axum` | Type-safe routing & middleware. |
+| **Database** | `PostgreSQL` + `sqlx` | Persistent state & job tracking. |
+| **Vector** | `Qdrant` | Semantic search & high-dimensional indexing. |
+| **Inference** | `candle` | Local, private embeddings & transcription. |
+| **Observability** | `tracing` | Structured logging with `request_id` propagation. |
 
-### 6. Optimization & Scaling
-
-* **Hybrid Search**: Future integration of BM25 (sparse) + Dense vectors in Qdrant.
-* **Streaming**: Refactor `ChatService` to `Stream<Item = String>` for real-time tokens.
-* **Lifecycle**: Implementation of TTL or GC for stale document chunks.
-
-Would you like me to generate the Rust trait definitions for the Application Ports?

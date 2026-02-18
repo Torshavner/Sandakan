@@ -9,17 +9,23 @@ use tokio::net::TcpListener;
 use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, FileLoader, JobRepository, VectorStore,
 };
-use sandakan::application::services::{IngestionService, RetrievalService};
+use sandakan::application::services::{IngestionService, IngestionWorker, RetrievalService};
 use sandakan::domain::ContentType;
+use sandakan::infrastructure::audio::{TranscriptionEngineFactory, TranscriptionProvider};
 use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
     PgConversationRepository, PgJobRepository, QdrantAdapter, create_pool,
 };
+use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
 };
-use sandakan::presentation::{AppState, Environment, ScaffoldConfig, Settings, create_router};
+use sandakan::presentation::{
+    AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
+};
+
+const INGESTION_CHANNEL_CAPACITY: usize = 64;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -125,10 +131,56 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let text_splitter = TextSplitterFactory::create(
-        settings.embeddings.strategy,
+        settings.chunking.strategy,
         settings.chunking.max_chunk_size,
         settings.chunking.overlap_tokens,
     );
+
+    let transcription_provider = match settings.extraction.audio.provider {
+        TranscriptionProviderSetting::Local => TranscriptionProvider::Local,
+        TranscriptionProviderSetting::OpenAi => TranscriptionProvider::OpenAi,
+    };
+
+    let transcription_engine = TranscriptionEngineFactory::create(
+        transcription_provider,
+        &settings.extraction.audio.whisper_model,
+        Some(settings.llm.api_key.clone()),
+        settings.llm.base_url.clone(),
+    )
+    .expect("Failed to initialize transcription engine");
+
+    tracing::info!(
+        provider = ?transcription_provider,
+        model = %settings.extraction.audio.whisper_model,
+        "Transcription engine initialized"
+    );
+
+    let staging_store =
+        StagingStoreFactory::create(&settings.storage).expect("Failed to initialize staging store");
+
+    tracing::info!(
+        provider = ?settings.storage.provider,
+        "Staging store initialized"
+    );
+
+    let (ingestion_sender, ingestion_receiver) =
+        tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
+
+    let worker = IngestionWorker::new(
+        ingestion_receiver,
+        Arc::clone(&file_loader),
+        Arc::clone(&embedder),
+        Arc::clone(&vector_store),
+        text_splitter.clone(),
+        Arc::clone(&job_repository),
+        transcription_engine,
+        Arc::clone(&staging_store),
+    );
+
+    tokio::spawn(async move {
+        worker.run().await;
+    });
+    tracing::info!("Ingestion worker spawned");
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
@@ -153,8 +205,10 @@ async fn main() -> anyhow::Result<()> {
         ingestion_service,
         retrieval_service,
         conversation_repository,
+        job_repository,
+        ingestion_sender,
+        staging_store,
         settings: settings.clone(),
-        scaffold_config: ScaffoldConfig::default(),
     };
 
     let router = create_router(state);

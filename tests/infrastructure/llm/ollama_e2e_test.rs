@@ -8,8 +8,10 @@ use tower::ServiceExt;
 
 use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, RepositoryError, SearchResult, VectorStore, VectorStoreError,
+    JobRepository, LlmClient, RepositoryError, SearchResult, StagingStore, StagingStoreError,
+    VectorStore, VectorStoreError,
 };
+use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::domain::{
     Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
@@ -18,11 +20,12 @@ use sandakan::domain::{
 use sandakan::infrastructure::llm::create_streaming_llm_client;
 use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 use sandakan::presentation::config::{
-    AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    EmbeddingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
-    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
+    AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
+    EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
+    StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, ScaffoldConfig, Settings, create_router};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const OLLAMA_MODEL: &str = "llama3.1";
@@ -176,6 +179,35 @@ impl JobRepository for MockJobRepository {
     }
 }
 
+struct MockStagingStore;
+
+#[async_trait::async_trait]
+impl StagingStore for MockStagingStore {
+    async fn store(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
+        _content_length: Option<u64>,
+    ) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+
+    async fn fetch(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+    ) -> Result<Vec<u8>, StagingStoreError> {
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
+        Ok(())
+    }
+
+    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+}
+
 fn test_settings() -> Settings {
     Settings {
         server: ServerSettings {
@@ -194,19 +226,27 @@ fn test_settings() -> Settings {
         embeddings: EmbeddingsSettings {
             provider: EmbeddingProvider::Local,
             model: "test-model".to_string(),
-            strategy: EmbeddingStrategy::Semantic,
             dimension: 384,
             chunk_overlap: 50,
         },
         chunking: ChunkingSettings {
             max_chunk_size: 512,
             overlap_tokens: 50,
+            strategy: ChunkingStrategy::Semantic,
         },
         llm: ollama_llm_settings(),
         logging: LoggingSettings {
             level: "info".to_string(),
             enable_json: false,
             enable_udp: false,
+        },
+        storage: StorageSettings {
+            provider: StorageProviderSetting::Local,
+            local_path: "./test-uploads".to_string(),
+            max_upload_size_bytes: 1073741824,
+            azure_account: None,
+            azure_access_key: None,
+            azure_container: None,
         },
         extraction: ExtractionSettings {
             pdf: PdfExtractionSettings {
@@ -217,6 +257,11 @@ fn test_settings() -> Settings {
                 enabled: true,
                 max_file_size_mb: 100,
                 whisper_model: "base".to_string(),
+                provider: TranscriptionProviderSetting::Local,
+            },
+            video: VideoExtractionSettings {
+                enabled: true,
+                max_file_size_mb: 500,
             },
         },
         rag: RagSettings {
@@ -260,15 +305,17 @@ fn create_ollama_test_app() -> axum::Router {
         "I cannot answer this.".to_string(),
     ));
 
+    let (ingestion_sender, _ingestion_receiver) =
+        tokio::sync::mpsc::channel::<IngestionMessage>(16);
+
     let state = AppState {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
+        job_repository: Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
+        ingestion_sender,
+        staging_store: Arc::new(MockStagingStore) as Arc<dyn StagingStore>,
         settings: test_settings(),
-        scaffold_config: ScaffoldConfig {
-            enabled: false,
-            mock_response_delay_ms: 0,
-        },
     };
 
     create_router(state)
