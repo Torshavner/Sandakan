@@ -4,23 +4,19 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use sandakan::application::ports::{
-    CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, StagingStore,
-    StagingStoreError, VectorStore, VectorStoreError,
-};
+use sandakan::application::ports::Embedder;
 use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
-use sandakan::domain::{
-    Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
-    JobStatus, Message,
-};
+use sandakan::infrastructure::llm::{MockEmbedder, MockLlmClient};
+use sandakan::infrastructure::persistence::{MockConversationRepository, MockJobRepository, MockVectorStore, MockVectorStoreLowScore};
+use sandakan::infrastructure::storage::MockStagingStore;
+use sandakan::infrastructure::text_processing::MockFileLoader;
 use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
     EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
     StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, Settings, create_router};
+use sandakan::presentation::{create_router, AppState, Settings};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -28,216 +24,6 @@ const TEST_TOP_K: usize = 5;
 const TEST_SIMILARITY_THRESHOLD: f32 = 0.7;
 const TEST_MAX_CONTEXT_TOKENS: usize = 3072;
 const TEST_FALLBACK_MESSAGE: &str = "I cannot answer this based on the available lecture notes.";
-
-struct MockFileLoader;
-
-#[async_trait::async_trait]
-impl FileLoader for MockFileLoader {
-    async fn extract_text(&self, data: &[u8], _doc: &Document) -> Result<String, FileLoaderError> {
-        String::from_utf8(data.to_vec())
-            .map_err(|e| FileLoaderError::ExtractionFailed(e.to_string()))
-    }
-}
-
-struct MockEmbedder;
-
-#[async_trait::async_trait]
-impl Embedder for MockEmbedder {
-    async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
-        Ok(Embedding::new(vec![0.1; 384]))
-    }
-
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedderError> {
-        Ok(texts
-            .iter()
-            .map(|_| Embedding::new(vec![0.1; 384]))
-            .collect())
-    }
-}
-
-struct MockLlmClient;
-
-#[async_trait::async_trait]
-impl LlmClient for MockLlmClient {
-    async fn complete(&self, _prompt: &str, _context: &str) -> Result<String, LlmClientError> {
-        Ok("Mock answer".to_string())
-    }
-
-    async fn complete_stream(
-        &self,
-        _prompt: &str,
-        _context: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<
-                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
-            >,
-        >,
-        LlmClientError,
-    > {
-        Ok(Box::pin(futures::stream::once(async {
-            Ok("Mock answer".to_string())
-        })))
-    }
-}
-
-struct MockVectorStore;
-
-#[async_trait::async_trait]
-impl VectorStore for MockVectorStore {
-    async fn create_collection(
-        &self,
-        _config: &CollectionConfig,
-    ) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-
-    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-
-    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
-        Ok(Some(384))
-    }
-
-    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-
-    async fn upsert(
-        &self,
-        _chunks: &[Chunk],
-        _embeddings: &[Embedding],
-    ) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-
-    async fn search(
-        &self,
-        _embedding: &Embedding,
-        _top_k: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError> {
-        Ok(vec![SearchResult {
-            chunk: Chunk::new("test chunk".to_string(), DocumentId::new(), Some(1), 0),
-            score: 0.95,
-        }])
-    }
-
-    async fn delete(&self, _chunk_ids: &[ChunkId]) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-}
-
-struct MockVectorStoreLowScore;
-
-#[async_trait::async_trait]
-impl VectorStore for MockVectorStoreLowScore {
-    async fn create_collection(
-        &self,
-        _config: &CollectionConfig,
-    ) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-
-    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-
-    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
-        Ok(Some(384))
-    }
-
-    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-
-    async fn upsert(
-        &self,
-        _chunks: &[Chunk],
-        _embeddings: &[Embedding],
-    ) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-
-    async fn search(
-        &self,
-        _embedding: &Embedding,
-        _top_k: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError> {
-        Ok(vec![SearchResult {
-            chunk: Chunk::new("test chunk".to_string(), DocumentId::new(), Some(1), 0),
-            score: 0.3,
-        }])
-    }
-
-    async fn delete(&self, _chunk_ids: &[ChunkId]) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-}
-
-struct MockConversationRepository;
-
-#[async_trait::async_trait]
-impl ConversationRepository for MockConversationRepository {
-    async fn create_conversation(
-        &self,
-        _conversation: &Conversation,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn get_conversation(
-        &self,
-        _id: ConversationId,
-    ) -> Result<Option<Conversation>, RepositoryError> {
-        Ok(None)
-    }
-
-    async fn append_message(&self, _message: &Message) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn get_messages(
-        &self,
-        _conversation_id: ConversationId,
-        _limit: usize,
-    ) -> Result<Vec<Message>, RepositoryError> {
-        Ok(vec![])
-    }
-}
-
-struct MockStagingStore;
-
-#[async_trait::async_trait]
-impl StagingStore for MockStagingStore {
-    async fn store(
-        &self,
-        _path: &sandakan::domain::StoragePath,
-        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
-        _content_length: Option<u64>,
-    ) -> Result<u64, StagingStoreError> {
-        Ok(0)
-    }
-
-    async fn fetch(
-        &self,
-        _path: &sandakan::domain::StoragePath,
-    ) -> Result<Vec<u8>, StagingStoreError> {
-        Ok(vec![])
-    }
-
-    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
-        Ok(())
-    }
-
-    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
-        Ok(0)
-    }
-}
-
-fn mock_staging_store() -> Arc<dyn StagingStore> {
-    Arc::new(MockStagingStore)
-}
 
 fn test_settings() -> Settings {
     Settings {
@@ -314,40 +100,6 @@ fn test_settings() -> Settings {
     }
 }
 
-struct MockJobRepository;
-
-#[async_trait::async_trait]
-impl JobRepository for MockJobRepository {
-    async fn create(&self, _job: &Job) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn get_by_id(&self, _id: JobId) -> Result<Option<Job>, RepositoryError> {
-        Ok(None)
-    }
-
-    async fn update_status(
-        &self,
-        _id: JobId,
-        _status: JobStatus,
-        _error_message: Option<&str>,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-
-    async fn list_by_status(&self, _status: JobStatus) -> Result<Vec<Job>, RepositoryError> {
-        Ok(vec![])
-    }
-}
-
-fn mock_job_repository() -> Arc<dyn JobRepository> {
-    Arc::new(MockJobRepository)
-}
-
-fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
-    Arc::new(MockConversationRepository)
-}
-
 fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
     tokio::spawn(async move {
@@ -373,14 +125,14 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
-        mock_job_repository(),
+        Arc::new(MockJobRepository),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        mock_conversation_repository(),
+        Arc::new(MockConversationRepository),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
@@ -391,9 +143,9 @@ fn create_test_app() -> axum::Router {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
-        job_repository: mock_job_repository(),
+        job_repository: Arc::new(MockJobRepository),
         ingestion_sender: create_ingestion_sender(),
-        staging_store: mock_staging_store(),
+        staging_store: Arc::new(MockStagingStore),
         settings: test_settings(),
     };
 
@@ -595,14 +347,14 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
-        mock_job_repository(),
+        Arc::new(MockJobRepository),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        mock_conversation_repository(),
+        Arc::new(MockConversationRepository),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
@@ -613,9 +365,9 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
-        job_repository: mock_job_repository(),
+        job_repository: Arc::new(MockJobRepository),
         ingestion_sender: create_ingestion_sender(),
-        staging_store: mock_staging_store(),
+        staging_store: Arc::new(MockStagingStore),
         settings: test_settings(),
     };
 

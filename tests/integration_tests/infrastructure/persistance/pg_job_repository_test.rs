@@ -1,7 +1,7 @@
 use sandakan::application::ports::JobRepository;
 use sandakan::domain::{DocumentId, Job, JobStatus};
 
-use super::pg_container_test::TestPostgres;
+use crate::helpers::TestPostgres;
 
 #[tokio::test]
 async fn given_new_job_when_creating_and_retrieving_then_job_is_persisted() {

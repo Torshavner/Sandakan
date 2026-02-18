@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::application::ports::Embedder;
 use crate::presentation::config::EmbeddingProvider;
 
-use super::{LocalCandleEmbedder, OpenAiEmbedder};
+use crate::infrastructure::llm::{LocalCandleEmbedder, OpenAiEmbedder};
 
 pub struct EmbedderFactory;
 

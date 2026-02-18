@@ -1,6 +1,6 @@
 use crate::application::ports::{LlmClient, LlmClientError};
 
-struct MockLlmClient;
+pub struct MockLlmClient;
 
 #[async_trait::async_trait]
 impl LlmClient for MockLlmClient {

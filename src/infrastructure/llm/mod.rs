@@ -1,11 +1,13 @@
-mod embedder_factory;
-mod local_candle_embedder;
 mod openai_client;
-mod openai_embedder;
 mod streaming_client;
+mod embeder;
+mod mock_llm_client;
 
-pub use embedder_factory::{EmbedderFactory, EmbedderFactoryError};
-pub use local_candle_embedder::LocalCandleEmbedder;
+pub use embeder::{EmbedderFactory, EmbedderFactoryError};
+pub use embeder::LocalCandleEmbedder;
+pub use embeder::MockEmbedder;
+pub use embeder::OpenAiEmbedder;
+
 pub use openai_client::OpenAiClient;
-pub use openai_embedder::OpenAiEmbedder;
-pub use streaming_client::{StreamingLlmClient, create_streaming_llm_client};
+pub use streaming_client::{create_streaming_llm_client, StreamingLlmClient};
+pub use mock_llm_client::MockLlmClient;

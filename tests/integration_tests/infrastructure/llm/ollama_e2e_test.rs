@@ -6,26 +6,22 @@ use axum::http::{Request, StatusCode};
 use futures::stream::StreamExt;
 use tower::ServiceExt;
 
-use sandakan::application::ports::{
-    CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, RepositoryError, SearchResult, StagingStore, StagingStoreError,
-    VectorStore, VectorStoreError,
-};
+use sandakan::application::ports::{Embedder, LlmClient};
 use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
-use sandakan::domain::{
-    Chunk, ChunkId, Conversation, ConversationId, Document, DocumentId, Embedding, Job, JobId,
-    JobStatus, Message,
+use sandakan::infrastructure::llm::{create_streaming_llm_client, MockEmbedder};
+use sandakan::infrastructure::persistence::{
+    MockConversationRepository, MockJobRepository, MockVectorStore,
 };
-use sandakan::infrastructure::llm::create_streaming_llm_client;
-use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
+use sandakan::infrastructure::storage::MockStagingStore;
+use sandakan::infrastructure::text_processing::{MockFileLoader, RecursiveCharacterSplitter};
 use sandakan::presentation::config::{
     AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
     EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
     StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{AppState, Settings, create_router};
+use sandakan::presentation::{create_router, AppState, Settings};
 
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const OLLAMA_MODEL: &str = "llama3.1";
@@ -50,161 +46,6 @@ fn ollama_llm_settings() -> LlmSettings {
         max_tokens: 256,
         temperature: 0.1,
         sse_keep_alive_seconds: 15,
-    }
-}
-
-// --- Mocks for non-LLM dependencies (reused from api_test pattern) ---
-
-struct MockFileLoader;
-
-#[async_trait::async_trait]
-impl FileLoader for MockFileLoader {
-    async fn extract_text(&self, data: &[u8], _doc: &Document) -> Result<String, FileLoaderError> {
-        String::from_utf8(data.to_vec())
-            .map_err(|e| FileLoaderError::ExtractionFailed(e.to_string()))
-    }
-}
-
-struct MockEmbedder;
-
-#[async_trait::async_trait]
-impl Embedder for MockEmbedder {
-    async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
-        Ok(Embedding::new(vec![0.1; 384]))
-    }
-
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedderError> {
-        Ok(texts
-            .iter()
-            .map(|_| Embedding::new(vec![0.1; 384]))
-            .collect())
-    }
-}
-
-struct MockVectorStore;
-
-#[async_trait::async_trait]
-impl VectorStore for MockVectorStore {
-    async fn create_collection(
-        &self,
-        _config: &CollectionConfig,
-    ) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
-        Ok(true)
-    }
-    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
-        Ok(Some(384))
-    }
-    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-    async fn upsert(
-        &self,
-        _chunks: &[Chunk],
-        _embeddings: &[Embedding],
-    ) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-    async fn search(
-        &self,
-        _embedding: &Embedding,
-        _top_k: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError> {
-        Ok(vec![SearchResult {
-            chunk: Chunk::new(
-                "Rust is a systems programming language focused on safety and performance."
-                    .to_string(),
-                DocumentId::new(),
-                Some(1),
-                0,
-            ),
-            score: 0.95,
-        }])
-    }
-    async fn delete(&self, _chunk_ids: &[ChunkId]) -> Result<(), VectorStoreError> {
-        Ok(())
-    }
-}
-
-struct MockConversationRepository;
-
-#[async_trait::async_trait]
-impl ConversationRepository for MockConversationRepository {
-    async fn create_conversation(
-        &self,
-        _conversation: &Conversation,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-    async fn get_conversation(
-        &self,
-        _id: ConversationId,
-    ) -> Result<Option<Conversation>, RepositoryError> {
-        Ok(None)
-    }
-    async fn append_message(&self, _message: &Message) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-    async fn get_messages(
-        &self,
-        _conversation_id: ConversationId,
-        _limit: usize,
-    ) -> Result<Vec<Message>, RepositoryError> {
-        Ok(vec![])
-    }
-}
-
-struct MockJobRepository;
-
-#[async_trait::async_trait]
-impl JobRepository for MockJobRepository {
-    async fn create(&self, _job: &Job) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-    async fn get_by_id(&self, _id: JobId) -> Result<Option<Job>, RepositoryError> {
-        Ok(None)
-    }
-    async fn update_status(
-        &self,
-        _id: JobId,
-        _status: JobStatus,
-        _error_message: Option<&str>,
-    ) -> Result<(), RepositoryError> {
-        Ok(())
-    }
-    async fn list_by_status(&self, _status: JobStatus) -> Result<Vec<Job>, RepositoryError> {
-        Ok(vec![])
-    }
-}
-
-struct MockStagingStore;
-
-#[async_trait::async_trait]
-impl StagingStore for MockStagingStore {
-    async fn store(
-        &self,
-        _path: &sandakan::domain::StoragePath,
-        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
-        _content_length: Option<u64>,
-    ) -> Result<u64, StagingStoreError> {
-        Ok(0)
-    }
-
-    async fn fetch(
-        &self,
-        _path: &sandakan::domain::StoragePath,
-    ) -> Result<Vec<u8>, StagingStoreError> {
-        Ok(vec![])
-    }
-
-    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
-        Ok(())
-    }
-
-    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
-        Ok(0)
     }
 }
 
@@ -291,14 +132,14 @@ fn create_ollama_test_app() -> axum::Router {
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
         text_splitter,
-        Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
+        Arc::new(MockJobRepository),
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
-        Arc::new(MockConversationRepository) as Arc<dyn ConversationRepository>,
+        Arc::new(MockConversationRepository),
         5,
         0.7,
         3072,
@@ -312,9 +153,9 @@ fn create_ollama_test_app() -> axum::Router {
         ingestion_service,
         retrieval_service,
         conversation_repository: Arc::new(MockConversationRepository),
-        job_repository: Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
+        job_repository: Arc::new(MockJobRepository),
         ingestion_sender,
-        staging_store: Arc::new(MockStagingStore) as Arc<dyn StagingStore>,
+        staging_store: Arc::new(MockStagingStore),
         settings: test_settings(),
     };
 

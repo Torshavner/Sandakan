@@ -1,7 +1,7 @@
 use sandakan::application::ports::ConversationRepository;
 use sandakan::domain::{Conversation, Message, MessageRole};
 
-use super::pg_container_test::TestPostgres;
+use crate::helpers::TestPostgres;
 
 #[tokio::test]
 async fn given_new_conversation_when_creating_and_retrieving_then_conversation_is_persisted() {
