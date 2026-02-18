@@ -1,9 +1,9 @@
-use std::time::Duration;
+use sandakan::infrastructure::persistence::{PgConversationRepository, PgJobRepository};
 use sqlx::PgPool;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use std::time::Duration;
 use testcontainers::core::ContainerPort;
 use testcontainers::runners::AsyncRunner;
-use sandakan::infrastructure::persistence::{PgConversationRepository, PgJobRepository};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 pub struct TestPostgres {
     pub pool: PgPool,
@@ -50,7 +50,6 @@ impl TestPostgres {
         }
     }
 }
-
 
 async fn wait_for_pg_connection(url: &str) -> PgPool {
     let max_retries = 10;

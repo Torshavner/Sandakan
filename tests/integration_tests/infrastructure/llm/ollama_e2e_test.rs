@@ -9,7 +9,7 @@ use tower::ServiceExt;
 use sandakan::application::ports::{Embedder, LlmClient};
 use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
-use sandakan::infrastructure::llm::{create_streaming_llm_client, MockEmbedder};
+use sandakan::infrastructure::llm::{MockEmbedder, create_streaming_llm_client};
 use sandakan::infrastructure::persistence::{
     MockConversationRepository, MockJobRepository, MockVectorStore,
 };
@@ -21,7 +21,7 @@ use sandakan::presentation::config::{
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
     StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{create_router, AppState, Settings};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const OLLAMA_MODEL: &str = "llama3.1";

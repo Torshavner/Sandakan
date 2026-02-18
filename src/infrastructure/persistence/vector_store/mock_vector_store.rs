@@ -1,6 +1,4 @@
-use crate::application::ports::{
-    CollectionConfig, SearchResult, VectorStore, VectorStoreError,
-};
+use crate::application::ports::{CollectionConfig, SearchResult, VectorStore, VectorStoreError};
 use crate::domain::{Chunk, ChunkId, DocumentId, Embedding};
 
 pub struct MockVectorStore;

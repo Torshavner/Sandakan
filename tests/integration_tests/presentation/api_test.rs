@@ -7,7 +7,9 @@ use tower::ServiceExt;
 use sandakan::application::ports::Embedder;
 use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
 use sandakan::infrastructure::llm::{MockEmbedder, MockLlmClient};
-use sandakan::infrastructure::persistence::{MockConversationRepository, MockJobRepository, MockVectorStore, MockVectorStoreLowScore};
+use sandakan::infrastructure::persistence::{
+    MockConversationRepository, MockJobRepository, MockVectorStore, MockVectorStoreLowScore,
+};
 use sandakan::infrastructure::storage::MockStagingStore;
 use sandakan::infrastructure::text_processing::MockFileLoader;
 use sandakan::presentation::config::{
@@ -16,7 +18,7 @@ use sandakan::presentation::config::{
     PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
     StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
-use sandakan::presentation::{create_router, AppState, Settings};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -102,9 +104,7 @@ fn test_settings() -> Settings {
 
 fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
-    tokio::spawn(async move {
-        while receiver.recv().await.is_some() {}
-    });
+    tokio::spawn(async move { while receiver.recv().await.is_some() {} });
     sender
 }
 
