@@ -1,7 +1,3 @@
-mod application;
-mod domain;
-mod infrastructure;
-
 use std::sync::Arc;
 
 use axum::body::Body;

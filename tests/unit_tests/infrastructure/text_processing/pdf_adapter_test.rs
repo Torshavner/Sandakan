@@ -5,7 +5,7 @@ use sandakan::infrastructure::text_processing::PdfAdapter;
 #[tokio::test]
 async fn given_valid_pdf_bytes_when_extracting_then_returns_text() {
     let adapter = PdfAdapter::new();
-    let pdf_bytes = include_bytes!("../../fixtures/sample.pdf");
+    let pdf_bytes = include_bytes!("../fixtures/sample.pdf");
     let document = Document::new(
         "sample.pdf".to_string(),
         ContentType::Pdf,
@@ -37,7 +37,7 @@ async fn given_corrupt_bytes_when_extracting_pdf_then_returns_extraction_failed(
 #[tokio::test]
 async fn given_empty_pdf_when_extracting_then_returns_no_text_found() {
     let adapter = PdfAdapter::new();
-    let pdf_bytes = include_bytes!("../../fixtures/empty.pdf");
+    let pdf_bytes = include_bytes!("../fixtures/empty.pdf");
     let document = Document::new(
         "empty.pdf".to_string(),
         ContentType::Pdf,

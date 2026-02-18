@@ -15,7 +15,7 @@ async fn given_pdf_document_when_loading_then_delegates_to_pdf_adapter() {
         (ContentType::Text, text_adapter),
     ]);
 
-    let pdf_bytes = include_bytes!("../../fixtures/sample.pdf");
+    let pdf_bytes = include_bytes!("../fixtures/sample.pdf");
     let document = Document::new(
         "sample.pdf".to_string(),
         ContentType::Pdf,
