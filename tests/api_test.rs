@@ -10,8 +10,8 @@ use tower::ServiceExt;
 
 use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, VectorStore,
-    VectorStoreError,
+    JobRepository, LlmClient, LlmClientError, RepositoryError, SearchResult, StagingStore,
+    StagingStoreError, VectorStore, VectorStoreError,
 };
 use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
 use sandakan::domain::{
@@ -19,10 +19,10 @@ use sandakan::domain::{
     JobStatus, Message,
 };
 use sandakan::presentation::config::{
-    AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    ChunkingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
-    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
-    TranscriptionProviderSetting, VideoExtractionSettings,
+    AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
+    EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
+    StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
 use sandakan::presentation::{AppState, Settings, create_router};
 
@@ -210,6 +210,39 @@ impl ConversationRepository for MockConversationRepository {
     }
 }
 
+struct MockStagingStore;
+
+#[async_trait::async_trait]
+impl StagingStore for MockStagingStore {
+    async fn store(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
+        _content_length: Option<u64>,
+    ) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+
+    async fn fetch(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+    ) -> Result<Vec<u8>, StagingStoreError> {
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
+        Ok(())
+    }
+
+    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+}
+
+fn mock_staging_store() -> Arc<dyn StagingStore> {
+    Arc::new(MockStagingStore)
+}
+
 fn test_settings() -> Settings {
     Settings {
         server: ServerSettings {
@@ -250,6 +283,14 @@ fn test_settings() -> Settings {
             level: "info".to_string(),
             enable_json: false,
             enable_udp: false,
+        },
+        storage: StorageSettings {
+            provider: StorageProviderSetting::Local,
+            local_path: "./test-uploads".to_string(),
+            max_upload_size_bytes: 1073741824,
+            azure_account: None,
+            azure_access_key: None,
+            azure_container: None,
         },
         extraction: ExtractionSettings {
             pdf: PdfExtractionSettings {
@@ -312,7 +353,10 @@ fn mock_conversation_repository() -> Arc<dyn ConversationRepository> {
 }
 
 fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
-    let (sender, _receiver) = tokio::sync::mpsc::channel(16);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(async move {
+        while receiver.recv().await.is_some() {}
+    });
     sender
 }
 
@@ -353,6 +397,7 @@ fn create_test_app() -> axum::Router {
         conversation_repository: Arc::new(MockConversationRepository),
         job_repository: mock_job_repository(),
         ingestion_sender: create_ingestion_sender(),
+        staging_store: mock_staging_store(),
         settings: test_settings(),
     };
 
@@ -574,6 +619,7 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         conversation_repository: Arc::new(MockConversationRepository),
         job_repository: mock_job_repository(),
         ingestion_sender: create_ingestion_sender(),
+        staging_store: mock_staging_store(),
         settings: test_settings(),
     };
 
@@ -641,4 +687,46 @@ async fn given_nonexistent_job_when_job_status_then_returns_not_found() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn given_valid_reference_when_ingesting_then_returns_accepted() {
+    let app = create_test_app();
+
+    let body = r#"{"storage_path":"some/path/video.mp4","filename":"video.mp4","content_type":"video/mp4"}"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ingest-reference")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn given_unsupported_content_type_when_ingesting_reference_then_returns_415() {
+    let app = create_test_app();
+
+    let body = r#"{"storage_path":"some/path/file.xyz","filename":"file.xyz","content_type":"application/octet-stream"}"#;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ingest-reference")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }

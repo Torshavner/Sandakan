@@ -8,7 +8,8 @@ use tower::ServiceExt;
 
 use sandakan::application::ports::{
     CollectionConfig, ConversationRepository, Embedder, EmbedderError, FileLoader, FileLoaderError,
-    JobRepository, LlmClient, RepositoryError, SearchResult, VectorStore, VectorStoreError,
+    JobRepository, LlmClient, RepositoryError, SearchResult, StagingStore, StagingStoreError,
+    VectorStore, VectorStoreError,
 };
 use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
@@ -19,10 +20,10 @@ use sandakan::domain::{
 use sandakan::infrastructure::llm::create_streaming_llm_client;
 use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 use sandakan::presentation::config::{
-    AudioExtractionSettings, ChunkingSettings, DatabaseSettings, EmbeddingProvider,
-    ChunkingStrategy, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
-    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings,
-    TranscriptionProviderSetting, VideoExtractionSettings,
+    AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
+    EmbeddingProvider, EmbeddingsSettings, ExtractionSettings, LlmSettings, LoggingSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, StorageProviderSetting,
+    StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
 };
 use sandakan::presentation::{AppState, Settings, create_router};
 
@@ -178,6 +179,35 @@ impl JobRepository for MockJobRepository {
     }
 }
 
+struct MockStagingStore;
+
+#[async_trait::async_trait]
+impl StagingStore for MockStagingStore {
+    async fn store(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+        _stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>>,
+        _content_length: Option<u64>,
+    ) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+
+    async fn fetch(
+        &self,
+        _path: &sandakan::domain::StoragePath,
+    ) -> Result<Vec<u8>, StagingStoreError> {
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _path: &sandakan::domain::StoragePath) -> Result<(), StagingStoreError> {
+        Ok(())
+    }
+
+    async fn head(&self, _path: &sandakan::domain::StoragePath) -> Result<u64, StagingStoreError> {
+        Ok(0)
+    }
+}
+
 fn test_settings() -> Settings {
     Settings {
         server: ServerSettings {
@@ -209,6 +239,14 @@ fn test_settings() -> Settings {
             level: "info".to_string(),
             enable_json: false,
             enable_udp: false,
+        },
+        storage: StorageSettings {
+            provider: StorageProviderSetting::Local,
+            local_path: "./test-uploads".to_string(),
+            max_upload_size_bytes: 1073741824,
+            azure_account: None,
+            azure_access_key: None,
+            azure_container: None,
         },
         extraction: ExtractionSettings {
             pdf: PdfExtractionSettings {
@@ -276,6 +314,7 @@ fn create_ollama_test_app() -> axum::Router {
         conversation_repository: Arc::new(MockConversationRepository),
         job_repository: Arc::new(MockJobRepository) as Arc<dyn JobRepository>,
         ingestion_sender,
+        staging_store: Arc::new(MockStagingStore) as Arc<dyn StagingStore>,
         settings: test_settings(),
     };
 

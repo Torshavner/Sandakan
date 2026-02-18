@@ -58,6 +58,11 @@ unicode-normalization = "0.1"
 tempfile = "3"
 regex = "1"
 
+# Storage
+object_store = { version = "0.11", features = ["aws", "azure"] }
+tokio-stream = "0.1"
+bytes = "1"
+
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }

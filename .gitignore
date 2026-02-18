@@ -19,3 +19,5 @@ target
 .DS_Store
 
 data/
+uploads/
+test-uploads/

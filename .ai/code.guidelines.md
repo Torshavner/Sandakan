@@ -1,146 +1,56 @@
-# Rust Code Guidelines
+# Code Guidelines
 
-## Philosophy
+## 1. AI Context Navigation & Macro-Routing
 
-Code conveys intent via type signatures, function naming, and module organization.
+To conserve context window and ensure deterministic navigation, this repository acts as a searchable graph. Top-level directories represent **business domains**, not technical layers.
 
-* **Minimal Comments:** Code should be self-documenting. Avoid redundant comments.
-* **Public APIs:** `///` only when purpose is non-obvious from name/signature.
-* **Non-obvious Logic:** `// ...` only for *why*, never *what*.
-* **Safety:** `// SAFETY:` invariants required for `unsafe` blocks.
+* **The Routing Table (`mod.rs`):** Every `mod.rs` MUST contain a `/// @AI:` doc block. This is strictly a semantic map connecting domain capabilities to file paths, never for explaining logic.
+* *Example:* `/// @AI: - refunds: Handles Stripe webhook processing -> mod refunds;`
+* **MANDATORY END-OF-TASK ACTION:** Whenever you implement a feature, extract a module, or modify a domain capability, **you MUST update the `/// @AI:` block in the relevant `mod.rs` file.** Never finish a task without syncing the routing map.
+* **The `wc -l` Gateway:** Large files destroy LLM attention. Before reading any implementation file, you MUST run `wc -l <filepath>`.
+* **The 250-Line Rule & The Bypass:** If a file exceeds 250 lines, it generally violates SRP.
+1. **Exception:** If the file begins with the `// @AI-BYPASS-LENGTH` header, **ignore the 250-line limit** and proceed normally. (Reserve this for complex configurations or un-splittable match blocks).
+2. **If no bypass exists, DO NOT** read the full file.
+3. Map symbols using `grep -E '^(pub )?(struct|enum|fn|impl|trait)' <filepath>`.
+4. Propose extracting complex `impl` blocks or enums into private submodules before proceeding.
 
----
+## 2. Clean Architecture & HTTP Handlers
 
-## Naming Conventions
+* **Zero-DTO Handlers:** Handlers MUST contain only orchestration (`Extract -> Service -> Map`).
+* **Strict Isolation:** Define DTOs, Requests, and Responses in a dedicated `schema.rs` or `contract` crate. Never define them inside handler files.
+* **Trait Boundaries:** Decouple handlers from infrastructure using traits defined in `core` crates. Implement them in `infrastructure`. Prefer static dispatch (`T: Trait`) over dynamic (`&dyn Trait`) to enable fast AI mocking without reading DB implementations.
 
-### Casing Standards
+## 3. Naming Conventions & Type System
 
-* **Types:** `PascalCase` (Structs, Enums, Traits).
-* **Functions/Variables:** `snake_case`.
-* **Constants/Statics:** `SCREAMING_SNAKE_CASE`.
-* **Lifetimes/Generics:** Single lowercase or descriptive name.
+Code conveys intent via signatures and types. Use `//` comments ONLY to explain *why* (complex business rules), never *what*.
 
-### Semantic Naming
+* **Casing:** `PascalCase` (Types), `snake_case` (Functions/Variables), `SCREAMING_SNAKE_CASE` (Constants).
+* **Semantics:** Use verb phrases for functions (`calculate_vwap`) and noun phrases for types (`TradeWriter`). Use exact domain spec terms.
+* **Newtype Pattern:** Wrap primitives for domain safety and to avoid stringly-typed APIs (e.g., `struct UserId(u64);`).
+* **State Machines & Typestates:** Use `enum` for explicit state handling. Enforce valid transitions via move semantics and generics (e.g., `ConnectionBuilder<Unvalidated> -> ConnectionBuilder<Validated>`).
 
-* **Functions:** Verb phrases (e.g., `calculate_vwap`, `write_to_db`).
-* **Types:** Noun phrases (e.g., `VwapAggregator`, `TradeWriter`).
-* **Domain:** Use spec-specific terms (e.g., `bps`, `spread`, `vwap`).
+## 4. Async & Concurrency
 
----
-
-## Type System Usage
-
-### Newtype Pattern
-
-Use for domain safety to prevent primitive mixing.
-
-```rust
-struct BinanceTradeId(u64);
-struct KrakenTradeId(u64);
-
-```
-
-### State Machines
-
-Use Enums for explicit state handling.
-
-```rust
-enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected { since: Instant },
-}
-
-```
-
-### Type State Pattern
-
-Enforce valid transitions via move semantics.
-
-```rust
-impl ConnectionBuilder<Unvalidated> {
-    fn validate(self) -> Result<ConnectionBuilder<Validated>> { ... }
-}
-
-```
-
----
-
-## Error Handling
-
-### Library vs Application
-
-* **Library:** Use `thiserror` for defined, variant-based errors.
-* **Application:** Use `anyhow` for high-level context and propagation.
-
-### Safety Invariants
-
-* **FORBIDDEN:** `unwrap()` or `expect()` in production hot paths.
-* **REQUIRED:** Propagate errors with `?` or map to domain errors.
-* **CHANNELS:** Explicitly handle `RecvError::Lagged` and `RecvError::Closed`.
-
----
-
-## Async & Concurrency
-
-### Patterns
-
-* **Observability:** Name `tokio::spawn` handles.
-* **Concurrency:** Use `tokio::select!` for multi-signal loops.
-* **Runtime Safety:** Never use blocking `std::thread::sleep` in async context; use `tokio::time::sleep`.
-
-### Ownership
-
-* **Shared Read:** Use `Arc<T>`.
-* **Shared Mutable:** Use `Arc<RwLock<T>>`.
+* **Runtime Rules:** Never use `std::thread::sleep` in async contexts; use `tokio::time::sleep`. Use `tokio::select!` for multi-signal loops.
+* **Observability:** Always name your `tokio::spawn` handles.
+* **Ownership & Locks:** Use `Arc<T>` for shared reads and `Arc<RwLock<T>>` for shared mutation. Do not overuse `Mutex`; prefer `RwLock` or channels.
 * **Resource Guards:** Consume `self` in builder `run()` methods to prevent reuse.
 
----
+## 5. Error Handling & Safety
 
-## Performance
+* **Crates:** Use `thiserror` for defined, variant-based library errors. Use `anyhow` for app-level context propagation.
+* **Safety Invariants:** `unwrap()` and `expect()` are **FORBIDDEN** in production hot paths. Map to domain errors or propagate with `?`. Require `// SAFETY:` comments for any `unsafe` block.
+* **Channels:** Explicitly handle `RecvError::Lagged` and `RecvError::Closed`.
+* **Silent Failures:** Use `_` only when intentional; otherwise, log or propagate.
 
-### Optimization Rules
+## 6. Performance
 
-* **Allocation:** Prefer `&str`/`&[T]` over `String`/`Vec<T>` in parameters.
-* **Pre-allocation:** Use `Vec::with_capacity` when size is known.
-* **Hot Paths:** Avoid `.clone()`. Iterate via `.iter()` to borrow.
+* **Borrowing:** Prefer `&str`/`&[T]` over `String`/`Vec<T>` in function parameters.
+* **Pre-allocation:** Always use `Vec::with_capacity` when the size is known.
+* **Hot Paths:** Avoid `.clone()`. Iterate via `.iter()` to borrow data.
 
----
+## 7. Testing, CI & Workspace
 
-## Module Organization
-
-### Structure
-
-* **Granularity:** One concern per module.
-* **Re-exports:** Use `mod.rs` or `lib.rs` for `pub use`.
-* **Hierarchy:** Prefer flat structures over deep nesting.
-
-### Traits
-
-* **Definition:** Place in `core` crates.
-* **Implementation:** Place in `infrastructure` or outer layers.
-* **Dispatch:** Prefer static dispatch (`T: Trait`) over dynamic dispatch (`&dyn Trait`).
-
----
-
-## Testing & CI
-
-### Conventions
-
-* **Unit Tests:** Internal `mod tests` with `#[cfg(test)]`.
-* **Integration:** Separate `tests/` directory.
-* **Linting:** Required `cargo clippy` and `cargo fmt`.
-
-### Workspace Management
-
-* **Dependencies:** Centralize in root `Cargo.toml` `[workspace.dependencies]`.
-* **Features:** Opt-in to specific crate features; avoid `full` versions to minimize bloat.
-
----
-
-## Anti-Patterns
-
-* **God Structs:** Violates SRP.
-* **Stringly-typed APIs:** Replace with Enums/Newtypes.
-* **Silent Failures:** Use `_` only when intentional; log or propagate otherwise.
-* **Mutex Overuse:** Use `RwLock` or channels for better concurrency.
+* **Testing Organization:** Place unit tests in an internal `mod tests` with `#[cfg(test)]` at the bottom of the file. Use a separate `tests/` directory for integration tests.
+* **Workspace Management:** Centralize dependency versions in the root `Cargo.toml` under `[workspace.dependencies]`. Opt-in to specific crate features; avoid `full` flags to minimize bloat.
+* **Linting:** `cargo clippy` and `cargo fmt` are strictly mandatory.

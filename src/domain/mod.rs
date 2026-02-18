@@ -9,6 +9,7 @@ mod job_status;
 mod message;
 mod message_id;
 mod message_role;
+mod storage_path;
 
 pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
@@ -21,3 +22,4 @@ pub use job_status::JobStatus;
 pub use message::Message;
 pub use message_id::MessageId;
 pub use message_role::MessageRole;
+pub use storage_path::StoragePath;

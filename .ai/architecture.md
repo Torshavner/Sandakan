@@ -1,162 +1,87 @@
-## System Architecture: Rust RAG Pipeline
+# Architecture
 
-### 1. Design Philosophy
+## 1. High-Level Design Philosophy
 
-* **Architecture**: Clean / Hexagonal. Decouples core logic from external adapters (Qdrant, PostgreSQL, OpenAI).
-* **Type Safety**: Newtype IDs (`ChunkId`, `DocumentId`, `ConversationId`, `JobId`, `MessageId`) and domain enums prevent misuse.
-* **Concurrency**: `tokio` for async I/O; background `IngestionWorker` via `mpsc` channel for decoupled processing.
-* **Modularity**: Trait-based ports with factory patterns allow hot-swapping providers (LLM, embeddings, transcription, chunking).
-* **Streaming**: SSE token streaming with `tokio::select!` multiplexing and keep-alive.
+This architecture follows **Hexagonal (Ports & Adapters)** principles to ensure the AI agent can navigate, mock, and test components in isolation. It prioritizes **context window efficiency** by enforcing small, specialized files and a searchable domain graph.
 
-### 2. Dependency Mapping
+* **Core Principle:** Dependencies point inward (**L4 → L3 → L2 → L1**).
+* **AI Navigability:** Every domain module contains a `mod.rs` with a `/// @AI:` routing map.
+* **Concurrency:** Non-blocking async I/O via `tokio` with dedicated background workers for heavy lifting (Ingestion).
 
-* **Domain (L1)**: Pure value objects and entities (`Chunk`, `Document`, `Job`, `Conversation`, `Message`, `Embedding`). No external dependencies.
-* **Application (L2)**: Business logic, Ports (Traits), and Services. Defines system capabilities and error types.
-* **Infrastructure (L3)**: Concrete Adapters. Implements Ports for Qdrant, PostgreSQL, OpenAI/Azure, Candle, PDF, Audio.
-* **Presentation (L4)**: Composition root (`main.rs`), Axum REST API, handlers, config, and state management.
-* **Direction**: L4 -> L3 -> L2 -> L1 (Dependencies point inward only).
+---
 
-### 3. Component Specifications
+## 2. Layered Structure & Context Boundaries
 
-#### Layer 1: Domain
+To prevent "Context Collapse," the system is partitioned into four distinct layers. Layer logic and testing boundaries are strictly defined.
 
-* **domain/chunk.rs**: `Chunk`, `ChunkId`, `DocumentId` — text segment with metadata (page, offset).
-* **domain/document.rs**: `Document`, `ContentType` enum (Pdf, Audio, Video, Text).
-* **domain/job.rs**: `Job` — async ingestion job tracking.
-* **domain/job_status.rs**: `JobStatus` enum (Queued, Processing, MediaExtraction, Transcribing, Embedding, Completed, Failed).
-* **domain/conversation.rs**: `Conversation` — RAG conversation context.
-* **domain/message.rs**: `Message` — chat message with role and content.
-* **domain/message_role.rs**: `MessageRole` enum (System, User, Assistant).
-* **domain/embedding.rs**: `Embedding` — vector with cosine similarity calculation.
-* **domain/conversation_id.rs**, **job_id.rs**, **message_id.rs**: Strong-typed UUID wrappers.
+### L1: Domain (The Core)
 
-#### Layer 2: Application
+* **Role:** Pure business logic and Value Objects. **Strictly No I/O.**
+* **Key Entities:** `Chunk`, `Document`, `Job`, `Conversation`, `Message`.
+* **Constraint:** Uses the **Newtype Pattern** (e.g., `struct ChunkId(Uuid)`) to prevent primitive obsession and ensure type-safe ID handling across the pipeline.
+* **Testing Bound:** Pure offline Unit tests inside `mod tests`.
 
-**Ports (Traits):**
+### L2: Application (The Orchestrator)
 
-* `FileLoader`: Extract text from uploaded files (PDF, plain text).
-* `VectorStore`: Collection CRUD, upsert embeddings, semantic search, delete.
-* `Embedder`: Single and batch text-to-embedding generation.
-* `LlmClient`: Chat completions with `complete()` and `complete_stream()`.
-* `TextSplitter`: Split text into chunks (semantic or fixed-size strategies).
-* `TranscriptionEngine`: Audio-to-text transcription.
-* `JobRepository`: Job lifecycle persistence (create, status updates, queries).
-* `ConversationRepository`: Conversation and message history persistence.
+* **Role:** Defines **Ports (Traits)** and Services.
+* **Ports:** `VectorStore`, `Embedder`, `LlmClient`, `TextSplitter`, `TranscriptionEngine`.
+* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `TokenCounter`.
+* **Testing Bound:** Offline Unit/Integration tests using hand-written, in-memory mocks/stubs. No heavy macro frameworks.
 
-**Services:**
+### L3: Infrastructure (The Adapters)
 
-* `IngestionService`: Synchronous document ingestion (extract -> split -> embed -> store).
-* `IngestionWorker`: Async background worker receiving `IngestionMessage` via channel; handles audio/video transcription pipeline with job status progression.
-* `RetrievalService`: RAG query execution (embed -> search -> filter by threshold -> token budget -> LLM completion); supports both batch and streaming responses.
-* `token_counter`: Token counting via `tiktoken-rs` for context window management.
+* **Role:** Concrete implementations of L2 Ports.
+* **Adapters:** `QdrantAdapter`, `PgRepository`, `OpenAiClient`, `CandleLocalInference`.
+* **Testing Bound:** E2E testing using `testcontainers` with dynamic port assignment. No mocked integration tests belong here.
 
-#### Layer 3: Infrastructure
+### L4: Presentation (The Composition Root)
 
-**Persistence:**
+* **Role:** Axum handlers, CLI entry points, and global `AppState`.
+* **Constraint:** Handlers are **Zero-DTO**. They only extract data, call an L2 Service, and map the response. DTOs must live in a separate `schema` or `contract` module.
 
-* `QdrantAdapter` implements `VectorStore` — gRPC client; maps `Chunk` + `Embedding` to `PointStruct`; payload indexes on `document_id`, `file_type`, `tenant_id`.
-* `PgJobRepository` implements `JobRepository` — PostgreSQL via `sqlx`.
-* `PgConversationRepository` implements `ConversationRepository` — PostgreSQL via `sqlx`.
+---
 
-**LLM:**
+## 3. Data Workflows & Execution Boundaries
 
-* `StreamingLlmClient` implements `LlmClient` — multi-provider (OpenAI, Azure, LMStudio) streaming chat completions via `reqwest` with SSE parsing. Provider-specific auth (Bearer vs `api-key` header).
-* `OpenAiEmbedder` implements `Embedder` — OpenAI `/v1/embeddings` with rate-limit handling.
-* `LocalCandleEmbedder` implements `Embedder` — local CPU inference via Candle ML framework; downloads models from Hugging Face Hub.
-* `EmbedderFactory` — creates embedder based on config (Local or OpenAI).
+The pipeline distinguishes between **Immediate API response** and **Deferred background processing** to maintain system responsiveness.
 
-**Audio:**
+### The Ingestion Pipeline (Write Path)
 
-* `CandleWhisperEngine` implements `TranscriptionEngine` — local Whisper inference via Candle; loads model, tokenizer, mel filters from Hugging Face Hub.
-* `OpenAiWhisperEngine` implements `TranscriptionEngine` — remote OpenAI Whisper API.
-* `TranscriptionEngineFactory` — creates engine based on config (Local or OpenAI).
-* `audio_decoder` — decodes audio formats (MP3, OGG, WAV, FLAC, AAC) via Symphonia; resamples to 16kHz PCM via Rubato.
+1. **Entry:** `POST /api/v1/ingest` validates the multipart upload.
+2. **Handoff:** A `Job` is created in Postgres (Status: `Queued`).
+3. **Worker:** An `IngestionWorker` (Background Actor) consumes the task via `mpsc` channel.
+4. **Process:** Routing via `CompositeFileLoader` → `TextSplitter` → `Embedder` → `VectorStore`.
 
-**Text Processing:**
+### The Retrieval Pipeline (Read Path)
 
-* `CompositeFileLoader` implements `FileLoader` — routes extraction by `ContentType` (PDF -> `PdfAdapter`, Text -> `PlainTextAdapter`).
-* `PdfAdapter` — extracts text per page via `pdf_oxide` with 30s timeout.
-* `PlainTextAdapter` — passthrough with sanitization.
-* `RecursiveCharacterSplitter` implements `TextSplitter` — fixed-size token-based chunking with overlap via `tiktoken-rs`.
-* `SemanticSplitter` implements `TextSplitter` — similarity-based chunking at sentence boundaries using embedder.
-* `TextSplitterFactory` — creates splitter based on `ChunkingStrategy` config (Semantic or Fixed).
-* `text_sanitizer` — removes control chars, extra whitespace, normalizes unicode.
+1. **Search:** User query is converted to a vector.
+2. **Augmentation:** Context chunks are pulled from `VectorStore` based on similarity thresholds.
+3. **Generation:** Streamed tokens are returned via SSE (Server-Sent Events) using `tokio::select!` for keep-alive management.
 
-**Observability:**
+---
 
-* `init_tracing` — structured JSON logging via `tracing-subscriber` with env filter.
-* `request_id_middleware` — injects `REQUEST_ID` header on all requests.
-* `prompt_sanitizer` — truncates sensitive data before tracing.
+## 4. Agentic Interaction Rules
 
-#### Layer 4: Presentation
+When modifying this architecture, the AI Agent must follow these state-management rules, cross-referencing Code and Test guidelines:
 
-**Handlers:**
+| Action | Required Architectural Step |
+| --- | --- |
+| **New Domain Added** | Create folder, add `mod.rs`, and register in the `/// @AI:` routing table. |
+| **New Provider Added** | Implement the L2 Trait in L3 and update the corresponding `Factory`. |
+| **Navigating Large Files** | Respect the `// @AI-BYPASS-LENGTH` header for configurations; otherwise, adhere to the file size limits and refactor triggers defined in Code Guidelines. |
+| **Testing Intent** | Route test execution intents strictly by directory: `mod tests` (Unit), `tests/integration/` (Offline/Mocked API), `tests/e2e/` (Containers). |
+| **Deferred Work** | Ignore any roadmap items or tasks tagged with `[DEFERRED]` or `[IGNORE]`. |
 
-* `POST /api/v1/ingest` — multipart file upload; creates `Document` + `Job`; sends to async worker channel; returns immediately.
-* `POST /v1/chat/completions` — OpenAI-compatible chat endpoint; SSE streaming with keep-alive; conversation history persistence.
-* `POST /api/v1/query` — RAG query; returns answer + source chunks with scores.
-* `GET /api/v1/jobs/{job_id}` — job status polling.
-* `GET /health` — liveness probe.
-* `GET /v1/models` — lists available models.
+---
 
-**Infrastructure:**
+## 5. Technical Stack Summary
 
-* `AppState<F, L, V, T>` — generic Axum state holding `Arc`-wrapped services, repos, config, and ingestion channel sender.
-* `Settings` — strongly-typed config from `appsettings.{env}.json` + `APP_*` env vars.
-* `ScaffoldConfig` — toggles echo mode for testing without LLM.
-* Router with CORS, tracing, and request-id middleware layers.
-
-### 4. Data Workflows
-
-#### Ingestion (Write Path)
-
-* **Trigger**: `POST /api/v1/ingest` multipart upload (PDF, Audio, Video, Text).
-* **Async Handoff**: Creates `Job` (Queued) and sends `IngestionMessage` to background worker via `mpsc` channel.
-* **Media Extraction** (Audio/Video): Decode audio -> resample to 16kHz PCM -> transcribe via Whisper engine.
-* **Text Extraction** (PDF/Text): Extract via `CompositeFileLoader` routing by `ContentType`.
-* **Chunking**: Split text via configured strategy (semantic similarity or fixed-size with overlap).
-* **Embedding**: Batch embedding generation via configured embedder (local Candle or OpenAI API).
-* **Storage**: Atomic upsert to Qdrant with payload indexes.
-* **Job Status Progression**: Queued -> Processing -> MediaExtraction -> Transcribing -> Embedding -> Completed (or Failed).
-
-#### Retrieval (Read Path)
-
-* **Query**: Natural language input via chat completions or query endpoint.
-* **Embedding**: Question -> vector via embedder.
-* **Search**: Cosine similarity search (Top-K) in Qdrant, filtered by similarity threshold.
-* **Token Budget**: Accumulate context chunks until `max_context_tokens` reached.
-* **Augmentation**: Construct prompt from system template + context chunks + user question.
-* **Generation**: Streaming or batch LLM completion via `StreamingLlmClient`.
-* **Persistence**: Store user + assistant messages in conversation history (PostgreSQL).
-
-### 5. Technical Stack
-
-| Component | Choice | Rationale |
+| Component | Technology | Intent |
 | --- | --- | --- |
-| Runtime | `tokio` | Standard for async I/O, channels, and concurrent API calls. |
-| HTTP | `axum` | Ergonomic Rust web framework with tower middleware. |
-| Vector DB | Qdrant | Rust-native, high-performance, gRPC support. |
-| Relational DB | PostgreSQL (`sqlx`) | Job tracking, conversation history, migrations. |
-| Serialization | `serde` | Zero-copy mapping between domain and DB/API payloads. |
-| Observability | `tracing` | Context-aware structured logging for async call stacks. |
-| Local Inference | `candle` | CPU-based Whisper transcription and embeddings without Python. |
-| Audio Decoding | `symphonia` + `rubato` | Multi-format audio decode and 16kHz resampling. |
-| PDF Extraction | `pdf_oxide` | Pure Rust PDF text extraction. |
-| Tokenization | `tiktoken-rs` | GPT tokenizer for context window management. |
-| LLM Streaming | `reqwest` + SSE | Direct multi-provider streaming (OpenAI, Azure, LMStudio). |
+| **Runtime** | `tokio` | Async execution & task spawning. |
+| **API** | `axum` | Type-safe routing & middleware. |
+| **Database** | `PostgreSQL` + `sqlx` | Persistent state & job tracking. |
+| **Vector** | `Qdrant` | Semantic search & high-dimensional indexing. |
+| **Inference** | `candle` | Local, private embeddings & transcription. |
+| **Observability** | `tracing` | Structured logging with `request_id` propagation. |
 
-### 6. Architectural Patterns
-
-* **Dependency Injection**: Trait-based ports resolved in composition root (`main.rs`).
-* **Factory Pattern**: `EmbedderFactory`, `TextSplitterFactory`, `TranscriptionEngineFactory` for config-driven provider selection.
-* **Strategy Pattern**: `ChunkingStrategy` (Semantic vs Fixed) and `EmbeddingProvider` (Local vs OpenAI).
-* **Composite Pattern**: `CompositeFileLoader` routes by `ContentType`.
-* **Repository Pattern**: `JobRepository`, `ConversationRepository` abstract persistence.
-* **Actor Pattern**: `IngestionWorker` as background task with `mpsc::channel(64)`.
-* **Value Objects**: Strong-typed UUID wrappers prevent ID misuse across aggregates.
-
-### 7. Optimization & Scaling
-
-* **Hybrid Search**: Future integration of BM25 (sparse) + Dense vectors in Qdrant.
-* **Lifecycle**: Implementation of TTL or GC for stale document chunks.
-* **Graceful Shutdown**: Store worker `JoinHandle` for clean SIGTERM handling.

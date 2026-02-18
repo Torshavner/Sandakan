@@ -6,9 +6,8 @@ use serde::Serialize;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::application::services::IngestionMessage;
-use crate::domain::{ContentType, Document, Job};
+use crate::domain::{ContentType, DocumentId, Job, StoragePath};
 use crate::presentation::state::AppState;
-
 
 // TODO: Move those fields to the another file
 #[derive(Serialize)]
@@ -23,7 +22,6 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-#[tracing::instrument(skip(state, multipart))]
 pub async fn ingest_handler<F, L, V, T>(
     State(state): State<AppState<F, L, V, T>>,
     mut multipart: Multipart,
@@ -34,7 +32,7 @@ where
     V: VectorStore + 'static,
     T: TextSplitter + 'static + ?Sized,
 {
-    let field = match multipart.next_field().await {
+    let mut field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         Ok(None) => {
             tracing::warn!("Ingest request with no file");
@@ -59,11 +57,14 @@ where
     };
 
     let filename = field.file_name().unwrap_or("unknown").to_string();
-    let content_type_str = field.content_type().unwrap_or("application/octet-stream");
+    let content_type_str = field
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
 
     tracing::debug!(filename = %filename, content_type = %content_type_str, "Processing file upload");
 
-    let content_type = match ContentType::from_mime(content_type_str) {
+    let content_type = match ContentType::from_mime(&content_type_str) {
         Some(ct) => ct,
         None => {
             tracing::warn!(content_type = %content_type_str, "Unsupported content type");
@@ -77,29 +78,56 @@ where
         }
     };
 
-    let data = match field.bytes().await {
-        Ok(d) => d,
+    let doc_id = DocumentId::new();
+    let storage_path = StoragePath::new(&doc_id, &filename);
+
+    // Stream multipart chunks directly to staging store without buffering
+    let byte_stream: futures::stream::BoxStream<'_, Result<bytes::Bytes, std::io::Error>> =
+        Box::pin(async_stream::stream! {
+            loop {
+                match field.chunk().await {
+                    Ok(Some(bytes)) => yield Ok(bytes),
+                    Ok(None) => break,
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+    let size_bytes = match state
+        .staging_store
+        .store(&storage_path, byte_stream, None)
+        .await
+    {
+        Ok(size) => size,
         Err(e) => {
-            tracing::error!(error = %e, "Failed to read file bytes");
+            tracing::error!(error = %e, "Failed to stage uploaded file");
             return (
-                StatusCode::BAD_REQUEST,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("Failed to read file: {}", e),
+                    error: format!("Upload staging failed: {}", e),
                 }),
             )
                 .into_response();
         }
     };
 
-    tracing::debug!(bytes = data.len(), "File data received");
+    tracing::debug!(bytes = size_bytes, "File staged to storage");
 
-    let document = Document::new(filename.clone(), content_type, data.len() as u64);
-    let doc_id = document.id;
+    let document = crate::domain::Document {
+        id: doc_id,
+        filename: filename.clone(),
+        content_type,
+        size_bytes,
+    };
     let job = Job::new(Some(doc_id), "document_ingestion".to_string());
     let job_id = job.id;
 
     if let Err(e) = state.job_repository.create(&job).await {
         tracing::error!(error = %e, "Failed to create job record");
+        let _ = state.staging_store.delete(&storage_path).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -112,11 +140,13 @@ where
     let msg = IngestionMessage {
         job_id,
         document,
-        data: data.to_vec(),
+        storage_path: storage_path.clone(),
+        delete_after_processing: true,
     };
 
     if let Err(e) = state.ingestion_sender.send(msg).await {
         tracing::error!(error = %e, "Failed to enqueue ingestion job");
+        let _ = state.staging_store.delete(&storage_path).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {

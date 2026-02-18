@@ -4,7 +4,7 @@
 
 POST {{base_url}}/api/v1/ingest
 [MultipartFormData]
-file: file,sample-video.mp4; video/mp4
+file: file,data/rag-intro.mp4; video/mp4
 HTTP 202
 [Captures]
 document_id: jsonpath "$.document_id"

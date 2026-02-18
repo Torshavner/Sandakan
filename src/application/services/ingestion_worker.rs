@@ -3,14 +3,16 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    Embedder, FileLoader, JobRepository, TextSplitter, TranscriptionEngine, VectorStore,
+    Embedder, FileLoader, JobRepository, StagingStore, TextSplitter, TranscriptionEngine,
+    VectorStore,
 };
-use crate::domain::{ContentType, Document, DocumentId, JobId, JobStatus};
+use crate::domain::{ContentType, Document, DocumentId, JobId, JobStatus, StoragePath};
 
 pub struct IngestionMessage {
     pub job_id: JobId,
     pub document: Document,
-    pub data: Vec<u8>,
+    pub storage_path: StoragePath,
+    pub delete_after_processing: bool,
 }
 
 pub struct IngestionWorker<F, V, T: ?Sized> {
@@ -21,6 +23,7 @@ pub struct IngestionWorker<F, V, T: ?Sized> {
     text_splitter: Arc<T>,
     job_repository: Arc<dyn JobRepository>,
     transcription_engine: Arc<dyn TranscriptionEngine>,
+    staging_store: Arc<dyn StagingStore>,
 }
 
 impl<F, V, T: ?Sized> IngestionWorker<F, V, T>
@@ -29,6 +32,7 @@ where
     V: VectorStore + 'static,
     T: TextSplitter + 'static,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         receiver: mpsc::Receiver<IngestionMessage>,
         file_loader: Arc<F>,
@@ -37,6 +41,7 @@ where
         text_splitter: Arc<T>,
         job_repository: Arc<dyn JobRepository>,
         transcription_engine: Arc<dyn TranscriptionEngine>,
+        staging_store: Arc<dyn StagingStore>,
     ) -> Self {
         Self {
             receiver,
@@ -46,6 +51,7 @@ where
             text_splitter,
             job_repository,
             transcription_engine,
+            staging_store,
         }
     }
 
@@ -76,17 +82,35 @@ where
             .await?;
 
         let result = self
-            .process_pipeline(job_id, &msg.document, &msg.data, content_type)
+            .process_pipeline(job_id, &msg.document, &msg.storage_path, content_type)
             .await;
 
         match &result {
             Ok(_) => {
+                if msg.delete_after_processing {
+                    if let Err(e) = self.staging_store.delete(&msg.storage_path).await {
+                        tracing::warn!(
+                            error = %e,
+                            path = %msg.storage_path,
+                            "Failed to delete staged file after successful ingestion"
+                        );
+                    }
+                }
                 self.update_status(job_id, JobStatus::Completed, None)
                     .await?;
                 tracing::info!(document_id = %doc_id.as_uuid(), "Ingestion completed");
             }
             Err(e) => {
                 let error_msg = e.to_string();
+                if msg.delete_after_processing {
+                    if let Err(del_err) = self.staging_store.delete(&msg.storage_path).await {
+                        tracing::warn!(
+                            error = %del_err,
+                            path = %msg.storage_path,
+                            "Failed to delete staged file after job failure"
+                        );
+                    }
+                }
                 self.update_status(job_id, JobStatus::Failed, Some(&error_msg))
                     .await?;
             }
@@ -99,10 +123,16 @@ where
         &self,
         job_id: JobId,
         document: &Document,
-        data: &[u8],
+        storage_path: &StoragePath,
         content_type: ContentType,
     ) -> Result<DocumentId, IngestionWorkerError> {
         let doc_id = document.id;
+
+        let data = self
+            .staging_store
+            .fetch(storage_path)
+            .await
+            .map_err(IngestionWorkerError::Staging)?;
 
         let text = match content_type {
             ContentType::Audio | ContentType::Video => {
@@ -118,7 +148,7 @@ where
                 tracing::debug!("Starting audio transcription");
 
                 self.transcription_engine
-                    .transcribe(data)
+                    .transcribe(&data)
                     .await
                     .map_err(IngestionWorkerError::Transcription)?
             }
@@ -126,7 +156,7 @@ where
                 self.update_status(job_id, JobStatus::Processing, None)
                     .await?;
                 self.file_loader
-                    .extract_text(data, document)
+                    .extract_text(&data, document)
                     .await
                     .map_err(IngestionWorkerError::FileLoading)?
             }
@@ -155,7 +185,7 @@ where
         self.vector_store
             .upsert(&chunks, &embeddings)
             .await
-            .map_err(IngestionWorkerError::Storage)?;
+            .map_err(IngestionWorkerError::VectorStore)?;
 
         Ok(doc_id)
     }
@@ -184,8 +214,10 @@ pub enum IngestionWorkerError {
     Splitting(crate::application::ports::TextSplitterError),
     #[error("embedding: {0}")]
     Embedding(crate::application::ports::EmbedderError),
-    #[error("storage: {0}")]
-    Storage(crate::application::ports::VectorStoreError),
+    #[error("vector store: {0}")]
+    VectorStore(crate::application::ports::VectorStoreError),
     #[error("repository: {0}")]
     Repository(crate::application::ports::RepositoryError),
+    #[error("staging store: {0}")]
+    Staging(crate::application::ports::StagingStoreError),
 }

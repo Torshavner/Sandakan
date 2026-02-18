@@ -17,6 +17,7 @@ use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
     PgConversationRepository, PgJobRepository, QdrantAdapter, create_pool,
 };
+use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
 };
@@ -154,6 +155,14 @@ async fn main() -> anyhow::Result<()> {
         "Transcription engine initialized"
     );
 
+    let staging_store =
+        StagingStoreFactory::create(&settings.storage).expect("Failed to initialize staging store");
+
+    tracing::info!(
+        provider = ?settings.storage.provider,
+        "Staging store initialized"
+    );
+
     let (ingestion_sender, ingestion_receiver) =
         tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
 
@@ -165,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
         text_splitter.clone(),
         Arc::clone(&job_repository),
         transcription_engine,
+        Arc::clone(&staging_store),
     );
 
     tokio::spawn(async move {
@@ -197,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
         conversation_repository,
         job_repository,
         ingestion_sender,
+        staging_store,
         settings: settings.clone(),
     };
 

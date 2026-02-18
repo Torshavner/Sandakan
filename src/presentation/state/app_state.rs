@@ -3,10 +3,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    ConversationRepository, FileLoader, JobRepository, LlmClient, TextSplitter, VectorStore,
+    ConversationRepository, FileLoader, JobRepository, LlmClient, StagingStore, TextSplitter,
+    VectorStore,
 };
 use crate::application::services::{IngestionMessage, IngestionService, RetrievalService};
-use crate::presentation::config::{Settings};
+use crate::presentation::config::Settings;
 
 pub struct AppState<F, L, V, T: ?Sized>
 where
@@ -20,6 +21,7 @@ where
     pub conversation_repository: Arc<dyn ConversationRepository>,
     pub job_repository: Arc<dyn JobRepository>,
     pub ingestion_sender: mpsc::Sender<IngestionMessage>,
+    pub staging_store: Arc<dyn StagingStore>,
     pub settings: Settings,
 }
 
@@ -37,6 +39,7 @@ where
             conversation_repository: Arc::clone(&self.conversation_repository),
             job_repository: Arc::clone(&self.job_repository),
             ingestion_sender: self.ingestion_sender.clone(),
+            staging_store: Arc::clone(&self.staging_store),
             settings: self.settings.clone(),
         }
     }
