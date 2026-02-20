@@ -28,6 +28,8 @@ pub use repository_error::RepositoryError;
 pub use search_result::SearchResult;
 pub use staging_store::{StagingStore, StagingStoreError};
 pub use text_splitter::{TextSplitter, TextSplitterError};
-pub use transcription_engine::{TranscriptionEngine, TranscriptionError};
+pub use transcription_engine::{
+    AudioDecoder, AudioDecoderError, TranscriptionEngine, TranscriptionError,
+};
 pub use vector_store::VectorStore;
 pub use vector_store_error::VectorStoreError;

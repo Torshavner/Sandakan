@@ -21,3 +21,6 @@ target
 data/
 uploads/
 test-uploads/
+
+# Rust lib 
+libpdfium.dylib

@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, Config};
 use hf_hub::api::sync::Api;
@@ -7,9 +9,7 @@ use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
-use crate::application::ports::{TranscriptionEngine, TranscriptionError};
-
-use super::audio_decoder::decode_audio_to_pcm;
+use crate::application::ports::{AudioDecoder, TranscriptionEngine, TranscriptionError};
 
 pub struct CandleWhisperEngine {
     model: Mutex<m::model::Whisper>,
@@ -17,11 +17,12 @@ pub struct CandleWhisperEngine {
     config: Config,
     device: Device,
     mel_filters: Vec<f32>,
+    decoder: Arc<dyn AudioDecoder>,
 }
 
 impl CandleWhisperEngine {
-    pub fn new(model_id: &str) -> Result<Self, TranscriptionError> {
-        let device = Device::Cpu;
+    pub fn new(model_id: &str, decoder: Arc<dyn AudioDecoder>) -> Result<Self, TranscriptionError> {
+        let device = Device::new_metal(0).unwrap_or(Device::Cpu);
 
         tracing::info!(
             device = ?device,
@@ -62,9 +63,11 @@ impl CandleWhisperEngine {
             .map_err(|e| TranscriptionError::ModelLoadFailed(format!("mel filters: {}", e)))?;
         let mel_filters = read_mel_filters(&mel_bytes, &config)?;
 
+        let dtype = Self::select_dtype(&device);
+
         // SAFETY: safetensors files are memory-mapped read-only
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], m::DTYPE, &device)
+            VarBuilder::from_mmaped_safetensors(&[weights_path], dtype, &device)
                 .map_err(|e| TranscriptionError::ModelLoadFailed(format!("weights: {}", e)))?
         };
 
@@ -79,14 +82,22 @@ impl CandleWhisperEngine {
             config,
             device,
             mel_filters,
+            decoder,
         })
+    }
+
+    pub fn select_dtype(_device: &Device) -> DType {
+        DType::F32
     }
 }
 
 #[async_trait]
 impl TranscriptionEngine for CandleWhisperEngine {
     async fn transcribe(&self, audio_data: &[u8]) -> Result<String, TranscriptionError> {
-        let pcm = decode_audio_to_pcm(audio_data)?;
+        let pcm = self
+            .decoder
+            .decode(audio_data)
+            .map_err(|e| TranscriptionError::DecodingFailed(e.to_string()))?;
 
         let chunk_samples = m::N_SAMPLES;
         let mut segments: Vec<String> = Vec::new();
@@ -102,13 +113,29 @@ impl TranscriptionEngine for CandleWhisperEngine {
                 chunk.to_vec()
             };
 
+            let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+            if rms < 0.01 {
+                tracing::debug!(segment = i, rms, "Skipping silent audio chunk");
+                continue;
+            }
+
             let mel_data = m::audio::pcm_to_mel(&self.config, &samples, &self.mel_filters);
             let n_mel = self.config.num_mel_bins;
             let n_frames = mel_data.len() / n_mel;
+            let n_frames_clamped = n_frames.min(m::N_FRAMES);
 
+            let dtype = Self::select_dtype(&self.device);
             let mel_tensor = Tensor::from_vec(mel_data, (1, n_mel, n_frames), &self.device)
                 .map_err(|e| {
                     TranscriptionError::TranscriptionFailed(format!("mel tensor: {}", e))
+                })?
+                .narrow(2, 0, n_frames_clamped)
+                .map_err(|e| {
+                    TranscriptionError::TranscriptionFailed(format!("mel narrow: {}", e))
+                })?
+                .to_dtype(dtype)
+                .map_err(|e| {
+                    TranscriptionError::TranscriptionFailed(format!("mel tensor cast: {}", e))
                 })?;
 
             mel_tensors.push((i, mel_tensor));
@@ -117,15 +144,17 @@ impl TranscriptionEngine for CandleWhisperEngine {
         let mut model = self.model.lock().await;
 
         for (i, mel_tensor) in mel_tensors {
-            tracing::debug!(segment = i, "Transcribing audio segment");
             let text = decode_segment(&mut model, &self.tokenizer, &self.device, &mel_tensor)?;
+
+            tracing::debug!(segment = i, "Transcribed audio segment");
+
             if !text.is_empty() {
                 segments.push(text);
             }
         }
 
         let transcript = segments.join(" ");
-
+        
         tracing::info!(
             segments = segments.len(),
             chars = transcript.len(),
@@ -169,13 +198,13 @@ fn decode_segment(
 
         let logits = model
             .decoder
-            .final_linear(
-                &decoder_output
-                    .squeeze(0)
-                    .map_err(|e| TranscriptionError::TranscriptionFailed(e.to_string()))?,
-            )
+            .final_linear(&decoder_output)
             .map_err(|e| TranscriptionError::TranscriptionFailed(format!("linear: {}", e)))?;
 
+        // logits shape: [1, seq_len, vocab_size] — squeeze batch then get last token
+        let logits = logits
+            .squeeze(0)
+            .map_err(|e| TranscriptionError::TranscriptionFailed(e.to_string()))?;
         let seq_len = logits
             .dim(0)
             .map_err(|e| TranscriptionError::TranscriptionFailed(e.to_string()))?;

@@ -53,9 +53,11 @@ impl LocalCandleEmbedder {
             }))
             .map_err(|e| EmbedderError::ModelLoadFailed(format!("truncation config: {}", e)))?;
 
+        let dtype = Self::select_dtype(&device);
+
         // SAFETY: safetensors files are memory-mapped read-only
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
+            VarBuilder::from_mmaped_safetensors(&[weights_path], dtype, &device)
                 .map_err(|e| EmbedderError::ModelLoadFailed(format!("weights: {}", e)))?
         };
 
@@ -72,7 +74,15 @@ impl LocalCandleEmbedder {
     }
 
     fn select_device() -> Device {
-        Device::Cpu
+        Device::new_metal(0).unwrap_or(Device::Cpu)
+    }
+
+    pub fn select_dtype(device: &Device) -> DType {
+        if device.is_cpu() {
+            DType::F32
+        } else {
+            DType::F16
+        }
     }
 
     fn encode_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedderError> {
@@ -119,6 +129,7 @@ impl LocalCandleEmbedder {
         let embeddings = self
             .model
             .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+            .and_then(|t| t.to_dtype(DType::F32))
             .map_err(|e| EmbedderError::InferenceFailed(e.to_string()))?;
 
         // Mean pooling with attention mask

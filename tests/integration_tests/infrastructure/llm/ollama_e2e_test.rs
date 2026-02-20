@@ -93,12 +93,23 @@ fn test_settings() -> Settings {
             pdf: PdfExtractionSettings {
                 enabled: true,
                 max_file_size_mb: 50,
+                provider: sandakan::presentation::config::ExtractorProvider::LocalVlm,
+                vlm_model: None,
+                vlm_revision: None,
+                vlm_base_url: None,
+                vlm_api_key: None,
+                azure_endpoint: None,
+                azure_key: None,
             },
             audio: AudioExtractionSettings {
                 enabled: true,
                 max_file_size_mb: 100,
                 whisper_model: "base".to_string(),
                 provider: TranscriptionProviderSetting::Local,
+                azure_endpoint: None,
+                azure_deployment: None,
+                azure_key: None,
+                azure_api_version: None,
             },
             video: VideoExtractionSettings {
                 enabled: true,

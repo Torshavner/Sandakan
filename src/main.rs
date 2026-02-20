@@ -7,11 +7,13 @@ use config::{Config, File};
 use tokio::net::TcpListener;
 
 use sandakan::application::ports::{
-    CollectionConfig, ConversationRepository, FileLoader, JobRepository, VectorStore,
+    AudioDecoder, CollectionConfig, ConversationRepository, FileLoader, JobRepository, VectorStore,
 };
 use sandakan::application::services::{IngestionService, IngestionWorker, RetrievalService};
 use sandakan::domain::ContentType;
-use sandakan::infrastructure::audio::{TranscriptionEngineFactory, TranscriptionProvider};
+use sandakan::infrastructure::audio::{
+    FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
+};
 use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
@@ -19,7 +21,7 @@ use sandakan::infrastructure::persistence::{
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
-    CompositeFileLoader, PdfAdapter, PlainTextAdapter, TextSplitterFactory,
+    CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
 use sandakan::presentation::{
     AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
@@ -70,7 +72,14 @@ async fn main() -> anyhow::Result<()> {
     let conversation_repository: Arc<dyn ConversationRepository> =
         Arc::new(PgConversationRepository::new(pg_pool.clone()));
 
-    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(PdfAdapter::new());
+    let pdf_adapter: Arc<dyn FileLoader> = ExtractorFactory::create(&settings.extraction.pdf)
+        .expect("Failed to initialize PDF extractor");
+
+    tracing::info!(
+        provider = ?settings.extraction.pdf.provider,
+        "PDF extractor initialized"
+    );
+
     let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
     let file_loader = Arc::new(CompositeFileLoader::new(vec![
         (ContentType::Pdf, pdf_adapter),
@@ -139,13 +148,32 @@ async fn main() -> anyhow::Result<()> {
     let transcription_provider = match settings.extraction.audio.provider {
         TranscriptionProviderSetting::Local => TranscriptionProvider::Local,
         TranscriptionProviderSetting::OpenAi => TranscriptionProvider::OpenAi,
+        TranscriptionProviderSetting::Azure => TranscriptionProvider::Azure,
     };
+
+    let audio_decoder: Option<Arc<dyn AudioDecoder>> =
+        if matches!(transcription_provider, TranscriptionProvider::Local) {
+            check_ffmpeg_binary()
+                .expect("ffmpeg required for Local transcription provider — install ffmpeg");
+            tracing::info!("ffmpeg binary validated");
+            Some(Arc::new(FfmpegAudioDecoder))
+        } else {
+            None
+        };
 
     let transcription_engine = TranscriptionEngineFactory::create(
         transcription_provider,
         &settings.extraction.audio.whisper_model,
         Some(settings.llm.api_key.clone()),
-        settings.llm.base_url.clone(),
+        settings
+            .extraction
+            .audio
+            .azure_endpoint
+            .clone()
+            .or(settings.llm.base_url.clone()),
+        settings.extraction.audio.azure_deployment.clone(),
+        settings.extraction.audio.azure_api_version.clone(),
+        audio_decoder,
     )
     .expect("Failed to initialize transcription engine");
 

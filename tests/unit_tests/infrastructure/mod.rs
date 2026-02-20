@@ -1,3 +1,4 @@
+mod audio;
 mod llm;
 mod observability;
 mod persistence;

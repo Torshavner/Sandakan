@@ -3,34 +3,33 @@ use std::sync::Arc;
 use sandakan::application::ports::{FileLoader, FileLoaderError};
 use sandakan::domain::{ContentType, Document};
 use sandakan::infrastructure::text_processing::{
-    CompositeFileLoader, PdfAdapter, PlainTextAdapter,
+    CompositeFileLoader, MockFileLoader, PlainTextAdapter,
 };
 
 #[tokio::test]
-async fn given_pdf_document_when_loading_then_delegates_to_pdf_adapter() {
-    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(PdfAdapter::new());
+async fn given_pdf_document_when_loading_then_delegates_to_registered_adapter() {
+    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(MockFileLoader);
     let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
     let loader = CompositeFileLoader::new(vec![
         (ContentType::Pdf, pdf_adapter),
         (ContentType::Text, text_adapter),
     ]);
 
-    let pdf_bytes = include_bytes!("../fixtures/sample.pdf");
+    let data = b"mock pdf bytes";
     let document = Document::new(
         "sample.pdf".to_string(),
         ContentType::Pdf,
-        pdf_bytes.len() as u64,
+        data.len() as u64,
     );
 
-    let result = loader.extract_text(pdf_bytes, &document).await;
+    let result = loader.extract_text(data, &document).await;
 
     assert!(result.is_ok());
-    assert!(!result.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn given_text_document_when_loading_then_delegates_to_text_adapter() {
-    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(PdfAdapter::new());
+    let pdf_adapter: Arc<dyn FileLoader> = Arc::new(MockFileLoader);
     let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
     let loader = CompositeFileLoader::new(vec![
         (ContentType::Pdf, pdf_adapter),

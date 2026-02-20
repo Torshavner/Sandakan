@@ -1,0 +1,2 @@
+mod azure_doc_intel_test;
+mod lm_studio_vlm_pdf_adapter_test;

@@ -18,3 +18,13 @@ pub enum TranscriptionError {
     #[error("api request failed: {0}")]
     ApiRequestFailed(String),
 }
+
+pub trait AudioDecoder: Send + Sync {
+    fn decode(&self, data: &[u8]) -> Result<Vec<f32>, AudioDecoderError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AudioDecoderError {
+    #[error("audio decoding failed: {0}")]
+    DecodingFailed(String),
+}
