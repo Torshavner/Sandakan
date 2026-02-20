@@ -65,7 +65,20 @@ where
     tracing::debug!(filename = %filename, content_type = %content_type_str, "Processing file upload");
 
     let content_type = match ContentType::from_mime(&content_type_str) {
-        Some(ct) => ct,
+        Some(ct @ (ContentType::Text | ContentType::Pdf)) => ct,
+        Some(_) => {
+            tracing::warn!(content_type = %content_type_str, "Content type not accepted for direct upload; use /ingest-reference instead");
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Content type '{}' is not supported for direct upload. Use /ingest-reference for audio and video files.",
+                        content_type_str
+                    ),
+                }),
+            )
+                .into_response();
+        }
         None => {
             tracing::warn!(content_type = %content_type_str, "Unsupported content type");
             return (
