@@ -1,0 +1,46 @@
+apiVersion: 1
+
+datasources:
+  # Loki — structured log aggregation
+  - name: Loki
+    type: loki
+    access: proxy
+    orgId: 1
+    url: http://loki:3100
+    basicAuth: false
+    isDefault: true
+    version: 1
+    editable: true
+
+  # Tempo — distributed tracing
+  - name: Tempo
+    type: tempo
+    access: proxy
+    orgId: 1
+    url: http://tempo:3200
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: true
+    jsonData:
+      httpMethod: GET
+      tracesToLogs:
+        filterByTraceID: true
+        filterBySpanID: false
+
+  # PostgreSQL — application database
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    orgId: 1
+    url: postgres:5432
+    user: sandakan
+    database: sandakan
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: true
+    secureJsonData:
+      password: "sandakan"
+    jsonData:
+      sslmode: "disable"

@@ -1,0 +1,34 @@
+# grafana-provisioning/datasources/datasources.yml
+apiVersion: 1
+
+datasources:
+  # Loki Datasource
+  - name: Loki
+    type: loki
+    access: proxy
+    orgId: 1
+    url: http://loki:3100
+    basicAuth: false
+    isDefault: true # Make this the default for new panels
+    version: 1
+    editable: true
+
+  # TimescaleDB / PostgreSQL Datasource
+  - name: TimescaleDB
+    type: postgres
+    access: proxy
+    orgId: 1
+    url: postgres-timescale:5432
+    user: postgres
+    database: main_db
+    basicAuth: false
+    isDefault: false
+    version: 1
+    editable: true
+    # This securely references the password
+    secureJsonData:
+      password: "password"
+    jsonData:
+      sslmode: "disable" # Allow non-SSL connection within Docker network
+      # Enable TimescaleDB-specific features in the query builder
+      timescaledb: true

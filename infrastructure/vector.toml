@@ -1,0 +1,49 @@
+# vector.toml
+
+# --- Sources ---
+
+# 1. Logs from your Host Machine (Rust App)
+[sources.host_app_logs]
+  type = "socket"
+  address = "0.0.0.0:9000"
+  mode = "udp"
+  decoding.codec = "json"
+
+# 2. Logs from Docker Containers (e.g. Postgres, Nginx)
+[sources.docker_logs]
+  type = "docker_logs"
+  include_labels = ["logging=true"]
+
+# --- Transforms ---
+
+# Remap Host Logs: Add a static service name
+[transforms.remap_host_logs]
+  type = "remap"
+  inputs = ["host_app_logs"]
+  source = '''
+  .service = "rust-app-local"
+  .source = "udp"
+  '''
+
+# Remap Docker Logs: Extract service name from labels
+[transforms.remap_docker_logs]
+  type = "remap"
+  inputs = ["docker_logs"]
+  source = '''
+  .service = .label."com.docker.compose.service"
+  .source = "docker"
+  '''
+
+# --- 3. SINK (Loki) ---
+
+# --- Sinks ---
+
+[sinks.loki]
+  type = "loki"
+  inputs = ["remap_host_logs", "remap_docker_logs"]
+  endpoint = "http://loki:3100"
+  encoding.codec = "json"
+  
+  # Organize logs in Loki by these labels
+  labels.service = "{{ service }}"
+  labels.source = "{{ source }}"
