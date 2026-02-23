@@ -80,6 +80,7 @@ fn test_settings() -> Settings {
             level: "info".to_string(),
             enable_json: false,
             enable_udp: false,
+            tempo_endpoint: None,
         },
         storage: StorageSettings {
             provider: StorageProviderSetting::Local,

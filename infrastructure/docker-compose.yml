@@ -34,6 +34,7 @@ services:
     environment:
       - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@sandakan.local}
       - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+      - PGADMIN_CONFIG_ALLOW_SPECIAL_EMAIL_DOMAINS=['local']
       - PGADMIN_CONFIG_SERVER_MODE=False
     volumes:
       - pgadmin_data:/var/lib/pgadmin
@@ -98,18 +99,74 @@ services:
     networks:
       - rag-network
 
-  # Diagram Generation Service
-  d2-mcp:
-    image: ghcr.io/h0rv/d2-mcp:main
-    container_name: d2-mcp
-    restart: always
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    command: -config.file=/etc/loki/loki-config.yml
     ports:
-      - "${D2_MCP_PORT:-8081}:8080"
+      - "3100:3100"
     volumes:
-      - ../src/architecture:/data
-    command: ["--transport", "http", "--image-type", "svg"]
+      - ./loki-config.yml:/etc/loki/loki-config.yml
+      - loki_data:/loki
     networks:
-      - rag-network
+      - monitoring-net
+    labels:
+      - logging="true"
+
+
+  vector:
+    image: timberio/vector:latest-alpine
+    container_name: vector
+    command: --config /etc/vector/vector.toml
+    ports:
+      - "9000:9000/udp"
+      - "8686:8686"
+    volumes:
+      - ./vector.toml:/etc/vector/vector.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitoring-net
+    labels:
+      - logging="true"
+    depends_on:
+      - loki
+
+
+  tempo:
+    image: grafana/tempo:2.8.3
+    container_name: tempo
+    command: ["-config.file=/etc/tempo/tempo-config.yml"]
+    ports:
+      - "3200:3200"   # HTTP UI / query API
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    volumes:
+      - ./tempo-config.yml:/etc/tempo/tempo-config.yml
+      - tempo_data:/var/tempo
+    networks:
+      - monitoring-net
+    labels:
+      - logging="true"
+
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning
+    networks:
+      - monitoring-net
+    labels:
+      - logging="true"
+    depends_on:
+      - loki
+      - tempo
 
 volumes:
   postgres_data:
@@ -120,7 +177,15 @@ volumes:
     driver: local
   open_webui_data:
     driver: local
+  grafanadata:
+    driver: local
+  loki_data:
+    driver: local
+  tempo_data:
+    driver: local
 
 networks:
   rag-network:
+    driver: bridge
+  monitoring-net:
     driver: bridge

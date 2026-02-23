@@ -55,8 +55,12 @@ async fn main() -> anyhow::Result<()> {
 
     let settings: Settings = configuration.try_deserialize()?;
 
-    let tracing_config = TracingConfig::default();
-    init_tracing(tracing_config, settings.server.port);
+    let tracing_config = TracingConfig {
+        environment: std::env::var("APP_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
+        json_format: settings.logging.enable_json,
+        tempo_endpoint: settings.logging.tempo_endpoint.clone(),
+    };
+    let otel_provider = init_tracing(tracing_config, settings.server.port);
 
     tracing::info!("Application starting in {} mode", environment);
 
@@ -299,6 +303,12 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, router).await?;
+
+    if let Some(provider) = otel_provider {
+        if let Err(e) = provider.shutdown() {
+            tracing::warn!(error = %e, "OTel provider shutdown error");
+        }
+    }
 
     Ok(())
 }

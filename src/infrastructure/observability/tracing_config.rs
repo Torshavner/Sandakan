@@ -2,6 +2,7 @@
 pub struct TracingConfig {
     pub environment: String,
     pub json_format: bool,
+    pub tempo_endpoint: Option<String>,
 }
 
 impl Default for TracingConfig {
@@ -11,6 +12,7 @@ impl Default for TracingConfig {
             json_format: std::env::var("LOG_FORMAT")
                 .map(|v| v.to_lowercase() == "json")
                 .unwrap_or(false),
+            tempo_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
         }
     }
 }
