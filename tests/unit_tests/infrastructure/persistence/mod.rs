@@ -1,1 +1,2 @@
+mod jsonl_eval_event_repository_test;
 mod qdrant_adapter_test;

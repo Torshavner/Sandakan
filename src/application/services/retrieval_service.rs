@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use crate::application::ports::{
-    ConversationRepository, Embedder, EmbedderError, LlmClient, LlmClientError, LlmTokenStream,
-    RepositoryError, VectorStore, VectorStoreError,
+    ConversationRepository, Embedder, EmbedderError, EvalEventRepository, EvalOutboxRepository,
+    LlmClient, LlmClientError, LlmTokenStream, RepositoryError, VectorStore, VectorStoreError,
 };
 use crate::application::services::count_tokens;
-use crate::domain::{ConversationId, Message, MessageRole};
+use crate::domain::{ConversationId, EvalEvent, EvalSource, Message, MessageRole};
 
 pub struct RetrievalService<L, V>
 where
@@ -16,6 +16,9 @@ where
     llm_client: Arc<L>,
     vector_store: Arc<V>,
     conversation_repository: Arc<dyn ConversationRepository>,
+    eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
+    eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+    model_config: String,
     top_k: usize,
     similarity_threshold: f32,
     max_context_tokens: usize,
@@ -27,13 +30,15 @@ where
     L: LlmClient,
     V: VectorStore,
 {
-    // TODO: Fix this too many args
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         embedder: Arc<dyn Embedder>,
         llm_client: Arc<L>,
         vector_store: Arc<V>,
         conversation_repository: Arc<dyn ConversationRepository>,
+        eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
+        eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+        model_config: String,
         top_k: usize,
         similarity_threshold: f32,
         max_context_tokens: usize,
@@ -44,6 +49,9 @@ where
             llm_client,
             vector_store,
             conversation_repository,
+            eval_event_repository,
+            eval_outbox_repository,
+            model_config,
             top_k,
             similarity_threshold,
             max_context_tokens,
@@ -139,7 +147,7 @@ where
                 .map_err(RetrievalError::Repository)?;
         }
 
-        let sources = trimmed_chunks
+        let sources: Vec<SourceChunk> = trimmed_chunks
             .into_iter()
             .map(|r| SourceChunk {
                 text: r.chunk.text.clone(),
@@ -147,6 +155,32 @@ where
                 score: r.score,
             })
             .collect();
+
+        if let (Some(event_repo), Some(outbox_repo)) =
+            (&self.eval_event_repository, &self.eval_outbox_repository)
+        {
+            let eval_sources: Vec<EvalSource> = sources
+                .iter()
+                .map(|s| EvalSource {
+                    text: s.text.clone(),
+                    page: s.page,
+                    score: s.score,
+                })
+                .collect();
+            let eval_event = EvalEvent::new(question, &answer, eval_sources, &self.model_config);
+            let event_repo = Arc::clone(event_repo);
+            let outbox_repo = Arc::clone(outbox_repo);
+            tokio::spawn(async move {
+                match event_repo.record(&eval_event).await {
+                    Ok(_) => {
+                        if let Err(e) = outbox_repo.enqueue(eval_event.id).await {
+                            tracing::warn!(error = %e, "Failed to enqueue eval outbox");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to record eval event"),
+                }
+            });
+        }
 
         Ok(QueryResponse { answer, sources })
     }

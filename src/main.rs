@@ -7,9 +7,12 @@ use config::{Config, File};
 use tokio::net::TcpListener;
 
 use sandakan::application::ports::{
-    AudioDecoder, CollectionConfig, ConversationRepository, FileLoader, JobRepository, VectorStore,
+    AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
+    EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
 };
-use sandakan::application::services::{IngestionService, IngestionWorker, RetrievalService};
+use sandakan::application::services::{
+    EvalWorker, IngestionService, IngestionWorker, RetrievalService,
+};
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
     FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
@@ -17,7 +20,8 @@ use sandakan::infrastructure::audio::{
 use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
-    PgConversationRepository, PgJobRepository, QdrantAdapter, create_pool,
+    PgConversationRepository, PgEvalEventRepository, PgEvalOutboxRepository,
+    PgEvalResultRepository, PgJobRepository, QdrantAdapter, create_pool,
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
@@ -218,16 +222,58 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&job_repository),
     ));
 
+    let (eval_event_repo, eval_outbox_repo) = if settings.eval.enabled {
+        let event_repo: Arc<dyn EvalEventRepository> =
+            Arc::new(PgEvalEventRepository::new(pg_pool.clone()));
+        let outbox_repo: Arc<dyn EvalOutboxRepository> =
+            Arc::new(PgEvalOutboxRepository::new(pg_pool.clone()));
+        (Some(event_repo), Some(outbox_repo))
+    } else {
+        (None, None)
+    };
+
+    let model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
+
     let retrieval_service = Arc::new(RetrievalService::new(
         Arc::clone(&embedder),
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::clone(&conversation_repository),
+        eval_event_repo.clone(),
+        eval_outbox_repo.clone(),
+        model_config,
         settings.rag.top_k,
         settings.rag.similarity_threshold,
         settings.rag.max_context_tokens,
         settings.rag.fallback_message.clone(),
     ));
+
+    if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
+        let result_repo: Arc<dyn EvalResultRepository> =
+            Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
+
+        let eval_worker = EvalWorker::new(
+            outbox_repo,
+            event_repo,
+            result_repo,
+            Arc::clone(&embedder),
+            llm_client.clone() as Arc<dyn LlmClient>,
+            settings.eval.faithfulness_threshold,
+            settings.eval.correctness_threshold,
+            std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
+            settings.eval.worker_batch_size,
+        );
+        tokio::spawn(async move {
+            eval_worker.run().await;
+        });
+        tracing::info!(
+            poll_interval_secs = settings.eval.worker_poll_interval_secs,
+            batch_size = settings.eval.worker_batch_size,
+            "EvalWorker spawned"
+        );
+    } else {
+        tracing::info!("Eval feature disabled");
+    }
 
     let state = AppState {
         ingestion_service,

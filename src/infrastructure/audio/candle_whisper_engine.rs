@@ -126,13 +126,9 @@ impl TranscriptionEngine for CandleWhisperEngine {
 
             let dtype = Self::select_dtype(&self.device);
             let mel_tensor = Tensor::from_vec(mel_data, (1, n_mel, n_frames), &self.device)
-                .map_err(|e| {
-                    TranscriptionError::TranscriptionFailed(format!("mel tensor: {}", e))
-                })?
+                .map_err(|e| TranscriptionError::TranscriptionFailed(format!("mel tensor: {}", e)))?
                 .narrow(2, 0, n_frames_clamped)
-                .map_err(|e| {
-                    TranscriptionError::TranscriptionFailed(format!("mel narrow: {}", e))
-                })?
+                .map_err(|e| TranscriptionError::TranscriptionFailed(format!("mel narrow: {}", e)))?
                 .to_dtype(dtype)
                 .map_err(|e| {
                     TranscriptionError::TranscriptionFailed(format!("mel tensor cast: {}", e))
@@ -154,7 +150,7 @@ impl TranscriptionEngine for CandleWhisperEngine {
         }
 
         let transcript = segments.join(" ");
-        
+
         tracing::info!(
             segments = segments.len(),
             chars = transcript.len(),

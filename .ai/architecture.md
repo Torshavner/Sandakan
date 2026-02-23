@@ -17,15 +17,15 @@ To prevent "Context Collapse," the system is partitioned into four distinct laye
 ### L1: Domain (The Core)
 
 * **Role:** Pure business logic and Value Objects. **Strictly No I/O.**
-* **Key Entities:** `Chunk`, `Document`, `Job`, `Conversation`, `Message`.
+* **Key Entities:** `Chunk`, `Document`, `Job`, `Conversation`, `Message`, `EvalEvent`, `EvalOutboxEntry`.
 * **Constraint:** Uses the **Newtype Pattern** (e.g., `struct ChunkId(Uuid)`) to prevent primitive obsession and ensure type-safe ID handling across the pipeline.
 * **Testing Bound:** Pure offline Unit tests inside `mod tests`.
 
 ### L2: Application (The Orchestrator)
 
 * **Role:** Defines **Ports (Traits)** and Services.
-* **Ports:** `VectorStore`, `Embedder`, `LlmClient`, `TextSplitter`, `TranscriptionEngine`.
-* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `TokenCounter`.
+* **Ports:** `VectorStore`, `Embedder`, `LlmClient`, `TextSplitter`, `TranscriptionEngine`, `EvalEventRepository`, `EvalOutboxRepository`.
+* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `EvalWorker` (Background scoring), `EvalRunner` (Offline CLI), `TokenCounter`.
 * **Testing Bound:** Offline Unit/Integration tests using hand-written, in-memory mocks/stubs. No heavy macro frameworks.
 
 ### L3: Infrastructure (The Adapters)
@@ -57,6 +57,17 @@ The pipeline distinguishes between **Immediate API response** and **Deferred bac
 1. **Search:** User query is converted to a vector.
 2. **Augmentation:** Context chunks are pulled from `VectorStore` based on similarity thresholds.
 3. **Generation:** Streamed tokens are returned via SSE (Server-Sent Events) using `tokio::select!` for keep-alive management.
+4. **Eval Capture (optional):** When `eval.enabled = true`, `RetrievalService` fire-and-forgets an `EvalEvent` record to `PgEvalEventRepository` and enqueues an `eval_outbox` row for background scoring.
+
+### Eval Background Worker
+
+Gated behind `eval.enabled` feature flag (default `false`). When enabled:
+
+1. **Outbox Pattern:** Each RAG query inserts an `eval_outbox` row (status: `pending`) alongside the `eval_events` row. Durable — survives restarts.
+2. **EvalWorker:** Background actor spawned at startup. Polls `eval_outbox` via `FOR UPDATE SKIP LOCKED` at configurable intervals (`eval.worker_poll_interval_secs`, default 30s).
+3. **Scoring:** For each claimed entry, loads the `EvalEvent`, runs LLM-as-judge faithfulness scoring via `eval_metrics::compute_faithfulness()`, emits structured `tracing::info!` with metric fields (`eval.result`), marks outbox row `done` or `failed`.
+4. **US-017 Ready:** `EvalWorker` separates `receive_batch()` (transport concern — outbox polling) from `process_entry()` (stable business logic). When the broker abstraction lands, `receive_batch()` extracts into `OutboxSubscriber<EvalOutboxEntry>::receive()` — mechanical refactor.
+5. **Observability:** Eval results emitted as structured tracing events. A future story adds the Loki/Vector/Grafana stack to consume them.
 
 ---
 

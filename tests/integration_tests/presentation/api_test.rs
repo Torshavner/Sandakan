@@ -110,6 +110,7 @@ fn test_settings() -> Settings {
             system_prompt: "test prompt".to_string(),
             fallback_message: TEST_FALLBACK_MESSAGE.to_string(),
         },
+        eval: sandakan::presentation::config::EvalSettings::default(),
     }
 }
 
@@ -144,6 +145,9 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::new(MockConversationRepository),
+        None,
+        None,
+        "test/mock-model".to_string(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,
@@ -366,6 +370,9 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::new(MockConversationRepository),
+        None,
+        None,
+        "test/mock-model".to_string(),
         TEST_TOP_K,
         TEST_SIMILARITY_THRESHOLD,
         TEST_MAX_CONTEXT_TOKENS,

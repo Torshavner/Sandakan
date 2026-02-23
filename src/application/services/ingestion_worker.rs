@@ -162,8 +162,6 @@ where
             }
         };
 
-
-
         self.update_status(job_id, JobStatus::Embedding, None)
             .await?;
 

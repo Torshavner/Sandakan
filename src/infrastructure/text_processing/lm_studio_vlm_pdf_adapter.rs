@@ -181,10 +181,10 @@ impl FileLoader for LmStudioVlmPdfAdapter {
         let mut page_texts: Vec<String> = Vec::with_capacity(png_buffers.len());
 
         for (index, png_bytes) in png_buffers.iter().enumerate() {
+            tracing::debug!(page = index, "Page converted to markdown");
+
             let page_text = self.infer_page_markdown(png_bytes, index).await?;
             if !page_text.trim().is_empty() {
-                tracing::debug!("Page: {index} sanitize to markdown: {page_text}");
-
                 page_texts.push(sanitize_extracted_text(&page_text));
             }
         }

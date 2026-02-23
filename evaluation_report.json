@@ -1,0 +1,20 @@
+{
+  "run_id": "47518503-4f44-4196-ae31-c2e1c0b776a1",
+  "judge_model": "lmstudio/llama3",
+  "total_evaluated": 1,
+  "mean_faithfulness": 0.3,
+  "mean_context_recall": null,
+  "mean_correctness": null,
+  "failed_count": 1,
+  "results": [
+    {
+      "event_id": "abf25916-773b-4177-bcc1-08b9b4351973",
+      "question": "What is chunking?",
+      "generated_answer": "Generated answer text.",
+      "context_recall": null,
+      "faithfulness": 0.3,
+      "correctness": null,
+      "failed": true
+    }
+  ]
+}

@@ -123,6 +123,7 @@ fn test_settings() -> Settings {
             system_prompt: SYSTEM_PROMPT.to_string(),
             fallback_message: "I cannot answer this.".to_string(),
         },
+        eval: sandakan::presentation::config::EvalSettings::default(),
     }
 }
 
@@ -151,6 +152,9 @@ fn create_ollama_test_app() -> axum::Router {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::new(MockConversationRepository),
+        None,
+        None,
+        "test/mock-model".to_string(),
         5,
         0.7,
         3072,
