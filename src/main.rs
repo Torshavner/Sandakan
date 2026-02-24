@@ -7,6 +7,7 @@ use config::{Config, File};
 use tokio::net::TcpListener;
 
 use sandakan::application::ports::McpClientPort;
+use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
@@ -31,7 +32,9 @@ use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
-use sandakan::infrastructure::tools::{StaticToolRegistry, WebSearchAdapter, WebSearchConfig};
+use sandakan::infrastructure::tools::{
+    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
+};
 use sandakan::presentation::{
     AppState, Environment, McpServerConfig, Settings, TranscriptionProviderSetting, create_router,
 };
@@ -299,6 +302,15 @@ async fn main() -> anyhow::Result<()> {
             }));
             schemas.push(WebSearchAdapter::tool_schema());
             handlers.push(adapter as Arc<dyn ToolHandler>);
+        }
+
+        if settings.agent.rag_search_enabled {
+            let rag = Arc::new(RagSearchAdapter::new(
+                Arc::clone(&retrieval_service) as Arc<dyn RetrievalServicePort>
+            ));
+            schemas.push(RagSearchAdapter::tool_schema());
+            handlers.push(rag as Arc<dyn ToolHandler>);
+            tracing::info!("RAG search tool registered");
         }
 
         // Build a composite MCP client: one entry per configured wire server.

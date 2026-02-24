@@ -30,5 +30,5 @@ pub use agent_service::{
 pub use eval_worker::{EvalWorker, EvalWorkerError};
 pub use ingestion_service::{IngestionError, IngestionService};
 pub use ingestion_worker::{IngestionMessage, IngestionWorker, IngestionWorkerError};
-pub use retrieval_service::{QueryResponse, RetrievalError, RetrievalService, SourceChunk};
+pub use retrieval_service::{QueryResponse, RetrievalService, StreamingQueryResponse};
 pub use token_counter::count_tokens;

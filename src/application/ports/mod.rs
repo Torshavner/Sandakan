@@ -21,6 +21,8 @@
 //! - payload_field_type         -> PayloadFieldType enum for Qdrant index configuration.
 //! - payload_index              -> PayloadIndex struct for Qdrant payload indexing.
 //! - repository_error           -> RepositoryError for conversation/job persistence failures.
+//! - retrieval_service_port     -> RetrievalServicePort port: search_chunks(&str) → Vec<SourceChunk>.
+//!   Retrieval-only (embed + search + filter); no LLM synthesis. Used by RagSearchAdapter.
 //! - search_result              -> SearchResult: (Chunk, score) pair returned from VectorStore.
 //! - staging_store              -> StagingStore port for temporary file upload storage.
 //! - text_splitter              -> TextSplitter port: split(text) → Vec<String>.
@@ -44,6 +46,7 @@ mod mcp_client_port;
 mod payload_field_type;
 mod payload_index;
 mod repository_error;
+mod retrieval_service_port;
 mod search_result;
 mod staging_store;
 mod text_splitter;
@@ -67,6 +70,7 @@ pub use mcp_client_port::{McpClientPort, McpError};
 pub use payload_field_type::PayloadFieldType;
 pub use payload_index::PayloadIndex;
 pub use repository_error::RepositoryError;
+pub use retrieval_service_port::{RetrievalError, RetrievalServicePort, SourceChunk};
 pub use search_result::SearchResult;
 pub use staging_store::{StagingStore, StagingStoreError};
 pub use text_splitter::{TextSplitter, TextSplitterError};

@@ -253,6 +253,8 @@ pub struct AgentSettings {
     #[serde(default)]
     pub web_search: Option<WebSearchSettings>,
     #[serde(default)]
+    pub rag_search_enabled: bool,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -316,6 +318,7 @@ impl Default for AgentSettings {
             enabled: false,
             max_iterations: default_max_iterations(),
             web_search: None,
+            rag_search_enabled: false,
             mcp_servers: Vec::new(),
         }
     }

@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::application::ports::{
-    ConversationRepository, Embedder, EmbedderError, EvalEventRepository, EvalOutboxRepository,
-    LlmClient, LlmClientError, LlmTokenStream, RepositoryError, VectorStore, VectorStoreError,
+    ConversationRepository, Embedder, EvalEventRepository, EvalOutboxRepository, LlmClient,
+    LlmTokenStream, RetrievalError, RetrievalServicePort, SourceChunk, VectorStore,
 };
 use crate::application::services::count_tokens;
 use crate::domain::{ConversationId, EvalEvent, EvalSource, Message, MessageRole};
@@ -278,6 +280,69 @@ where
             conversation_id,
         })
     }
+
+    pub async fn search_chunks(&self, query: &str) -> Result<Vec<SourceChunk>, RetrievalError> {
+        let query_embedding = self
+            .embedder
+            .embed(query)
+            .await
+            .map_err(RetrievalError::Embedding)?;
+
+        let results = self
+            .vector_store
+            .search(&query_embedding, self.top_k)
+            .await
+            .map_err(RetrievalError::Search)?;
+
+        if results.is_empty()
+            || results
+                .first()
+                .map(|r| r.score < self.similarity_threshold)
+                .unwrap_or(false)
+        {
+            return Ok(Vec::new());
+        }
+
+        let filtered_results: Vec<_> = results
+            .into_iter()
+            .filter(|r| r.score >= self.similarity_threshold)
+            .collect();
+
+        let mut accumulated_tokens = 0;
+        let mut trimmed_chunks = Vec::new();
+
+        for result in &filtered_results {
+            let chunk_tokens = count_tokens(&result.chunk.text);
+            if accumulated_tokens + chunk_tokens <= self.max_context_tokens {
+                accumulated_tokens += chunk_tokens;
+                trimmed_chunks.push(result);
+            } else {
+                break;
+            }
+        }
+
+        let chunks = trimmed_chunks
+            .into_iter()
+            .map(|r| SourceChunk {
+                text: r.chunk.text.clone(),
+                page: r.chunk.page,
+                score: r.score,
+            })
+            .collect();
+
+        Ok(chunks)
+    }
+}
+
+#[async_trait]
+impl<L, V> RetrievalServicePort for RetrievalService<L, V>
+where
+    L: LlmClient,
+    V: VectorStore,
+{
+    async fn search_chunks(&self, query: &str) -> Result<Vec<SourceChunk>, RetrievalError> {
+        self.search_chunks(query).await
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -290,23 +355,4 @@ pub struct StreamingQueryResponse {
     pub token_stream: LlmTokenStream,
     pub sources: Vec<SourceChunk>,
     pub conversation_id: Option<ConversationId>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceChunk {
-    pub text: String,
-    pub page: Option<u32>,
-    pub score: f32,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RetrievalError {
-    #[error("embedding: {0}")]
-    Embedding(EmbedderError),
-    #[error("search: {0}")]
-    Search(#[from] VectorStoreError),
-    #[error("completion: {0}")]
-    Completion(LlmClientError),
-    #[error("repository: {0}")]
-    Repository(RepositoryError),
 }
