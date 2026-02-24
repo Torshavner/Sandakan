@@ -6,6 +6,8 @@ pub enum MessageRole {
     System,
     User,
     Assistant,
+    Tool,
+    ToolResponse,
 }
 
 impl MessageRole {
@@ -14,6 +16,8 @@ impl MessageRole {
             MessageRole::System => "SYSTEM",
             MessageRole::User => "USER",
             MessageRole::Assistant => "ASSISTANT",
+            MessageRole::Tool => "TOOL",
+            MessageRole::ToolResponse => "TOOL_RESPONSE",
         }
     }
 }
@@ -26,6 +30,8 @@ impl FromStr for MessageRole {
             "SYSTEM" => Ok(MessageRole::System),
             "USER" => Ok(MessageRole::User),
             "ASSISTANT" => Ok(MessageRole::Assistant),
+            "TOOL" => Ok(MessageRole::Tool),
+            "TOOL_RESPONSE" => Ok(MessageRole::ToolResponse),
             _ => Err(format!("Invalid message role: {}", s)),
         }
     }

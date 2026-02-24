@@ -1,9 +1,13 @@
+// @AI-BYPASS-LENGTH
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::{LlmClient, LlmClientError, LlmTokenStream};
+use crate::application::ports::{
+    AgentMessage, LlmClient, LlmClientError, LlmTokenStream, LlmToolResponse, ToolSchema,
+};
+use crate::domain::{ToolCall, ToolCallId, ToolName};
 use crate::presentation::config::LlmSettings;
 
 pub struct StreamingLlmClient {
@@ -16,6 +20,8 @@ pub struct StreamingLlmClient {
     temperature: f32,
     system_prompt_template: String,
 }
+
+// ─── RAG types (simple role + content only) ───────────────────────────────────
 
 #[derive(Serialize)]
 struct ChatCompletionRequest {
@@ -59,6 +65,88 @@ struct ChunkDelta {
     content: Option<String>,
 }
 
+// ─── Tool-calling types (OpenAI function-calling format) ──────────────────────
+
+#[derive(Serialize)]
+struct OaiMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OaiToolCallOut>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OaiToolCallOut {
+    id: String,
+    r#type: &'static str,
+    function: OaiFunctionCallOut,
+}
+
+#[derive(Serialize)]
+struct OaiFunctionCallOut {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Serialize)]
+struct ToolCallRequest {
+    model: String,
+    messages: Vec<OaiMessage>,
+    tools: Vec<OaiToolDefinition>,
+    max_tokens: usize,
+    temperature: f32,
+}
+
+#[derive(Serialize)]
+struct OaiToolDefinition {
+    r#type: &'static str,
+    function: OaiFunctionDef,
+}
+
+#[derive(Serialize)]
+struct OaiFunctionDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct ToolCallResponse {
+    choices: Vec<ToolCallChoice>,
+}
+
+#[derive(Deserialize)]
+struct ToolCallChoice {
+    message: OaiResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct OaiResponseMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OaiToolCallIn>,
+}
+
+#[derive(Deserialize)]
+struct OaiToolCallIn {
+    id: String,
+    function: OaiFunctionCallIn,
+}
+
+#[derive(Deserialize)]
+struct OaiFunctionCallIn {
+    name: String,
+    arguments: String,
+}
+
+// ─── Impl ─────────────────────────────────────────────────────────────────────
+
 impl StreamingLlmClient {
     fn build_messages(&self, prompt: &str, context: &str) -> Vec<ChatMessage> {
         let system_content = self.system_prompt_template.replace("{context}", context);
@@ -80,6 +168,58 @@ impl StreamingLlmClient {
         } else {
             request.header("Authorization", format!("Bearer {}", self.api_key))
         }
+    }
+
+    fn agent_messages_to_oai(messages: &[AgentMessage]) -> Vec<OaiMessage> {
+        messages
+            .iter()
+            .map(|m| match m {
+                AgentMessage::System(text) => OaiMessage {
+                    role: "system".to_string(),
+                    content: Some(text.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+                AgentMessage::User(text) => OaiMessage {
+                    role: "user".to_string(),
+                    content: Some(text.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                },
+                AgentMessage::Assistant { content, tool_calls } => OaiMessage {
+                    role: "assistant".to_string(),
+                    content: content.clone(),
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            tool_calls
+                                .iter()
+                                .map(|tc| OaiToolCallOut {
+                                    id: tc.id.to_string(),
+                                    r#type: "function",
+                                    function: OaiFunctionCallOut {
+                                        name: tc.name.to_string(),
+                                        arguments: tc.arguments.to_string(),
+                                    },
+                                })
+                                .collect(),
+                        )
+                    },
+                    tool_call_id: None,
+                    name: None,
+                },
+                AgentMessage::ToolResult(result) => OaiMessage {
+                    role: "tool".to_string(),
+                    content: Some(result.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: Some(result.tool_call_id.to_string()),
+                    name: Some(result.tool_name.to_string()),
+                },
+            })
+            .collect()
     }
 }
 
@@ -196,6 +336,92 @@ impl LlmClient for StreamingLlmClient {
         }));
 
         Ok(token_stream)
+    }
+
+    async fn complete_with_tools(
+        &self,
+        messages: &[AgentMessage],
+        tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let oai_messages = Self::agent_messages_to_oai(messages);
+        let oai_tools: Vec<OaiToolDefinition> = tools
+            .iter()
+            .map(|t| OaiToolDefinition {
+                r#type: "function",
+                function: OaiFunctionDef {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.parameters.clone(),
+                },
+            })
+            .collect();
+
+        let request_body = ToolCallRequest {
+            model: self.model.clone(),
+            messages: oai_messages,
+            tools: oai_tools,
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+        };
+
+        let request = self
+            .client
+            .post(format!("{}/chat/completions", self.base_url))
+            .json(&request_body);
+        let response = self
+            .apply_auth(request)
+            .send()
+            .await
+            .map_err(|e| LlmClientError::ApiRequestFailed(e.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(LlmClientError::RateLimited);
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmClientError::ApiRequestFailed(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let tool_response: ToolCallResponse = response
+            .json()
+            .await
+            .map_err(|e| LlmClientError::InvalidResponse(e.to_string()))?;
+
+        let message = tool_response
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message)
+            .ok_or_else(|| LlmClientError::InvalidResponse("empty choices".to_string()))?;
+
+        if !message.tool_calls.is_empty() {
+            let mut calls = Vec::with_capacity(message.tool_calls.len());
+            for raw in message.tool_calls {
+                let arguments = serde_json::from_str::<serde_json::Value>(&raw.function.arguments)
+                    .map_err(|e| {
+                        LlmClientError::ToolCallParsing(format!(
+                            "failed to parse arguments for '{}': {}",
+                            raw.function.name, e
+                        ))
+                    })?;
+                calls.push(ToolCall {
+                    id: ToolCallId::new(raw.id),
+                    name: ToolName::new(raw.function.name),
+                    arguments,
+                });
+            }
+            return Ok(LlmToolResponse::ToolCalls(calls));
+        }
+
+        let content = message
+            .content
+            .unwrap_or_default();
+        Ok(LlmToolResponse::Content(content))
     }
 }
 

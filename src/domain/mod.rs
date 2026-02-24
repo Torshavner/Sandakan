@@ -1,4 +1,5 @@
 //! @AI: domain module routing map
+//! - agent_state    -> AgentState enum (Thinking | AwaitingToolExecution | YieldingResponse | Failed).
 //! - chunk          -> Chunk (text + metadata), ChunkId (UUID newtype), DocumentId (UUID newtype).
 //! - conversation   -> Conversation aggregate with ordered Message history.
 //! - conversation_id -> ConversationId (UUID newtype) with from_uuid / as_uuid.
@@ -16,11 +17,14 @@
 //! - job            -> Job aggregate for ingestion pipeline lifecycle tracking.
 //! - job_id         -> JobId (UUID newtype).
 //! - job_status     -> JobStatus enum (Queued | Processing | Done | Failed).
-//! - message        -> Message value object (id, conversation_id, role, content, created_at).
+//! - message        -> Message value object (id, conversation_id, role, content, tool_call_id, created_at).
 //! - message_id     -> MessageId (UUID newtype).
-//! - message_role   -> MessageRole enum (User | Assistant | System) with as_str() / parse().
+//! - message_role   -> MessageRole enum (User | Assistant | System | Tool | ToolResponse) with as_str() / parse().
 //! - storage_path   -> StoragePath value object for staging store file references.
+//! - tool_call      -> ToolCallId (String newtype), ToolName (String newtype),
+//!   ToolCall (id + name + arguments: Value), ToolResult (tool_call_id + tool_name + content).
 
+mod agent_state;
 mod chunk;
 mod conversation;
 mod conversation_id;
@@ -37,7 +41,9 @@ mod message;
 mod message_id;
 mod message_role;
 mod storage_path;
+mod tool_call;
 
+pub use agent_state::AgentState;
 pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
 pub use conversation_id::ConversationId;
@@ -54,3 +60,4 @@ pub use message::Message;
 pub use message_id::MessageId;
 pub use message_role::MessageRole;
 pub use storage_path::StoragePath;
+pub use tool_call::{ToolCall, ToolCallId, ToolName, ToolResult};

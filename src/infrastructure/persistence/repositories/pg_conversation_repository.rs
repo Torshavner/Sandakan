@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use tracing::instrument;
 
 use crate::application::ports::{ConversationRepository, RepositoryError};
-use crate::domain::{Conversation, ConversationId, Message, MessageId, MessageRole};
+use crate::domain::{Conversation, ConversationId, Message, MessageId, MessageRole, ToolCallId};
 
 pub struct PgConversationRepository {
     pool: PgPool,
@@ -82,16 +82,18 @@ impl ConversationRepository for PgConversationRepository {
         let message_id = message.id.as_uuid();
         let conversation_id = message.conversation_id.as_uuid();
         let role = message.role.as_str();
+        let tool_call_id = message.tool_call_id.as_ref().map(|id| id.as_str().to_string());
 
         sqlx::query!(
             r#"
-            INSERT INTO messages (id, conversation_id, role, content, created_at)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO messages (id, conversation_id, role, content, tool_call_id, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
             message_id,
             conversation_id,
             role,
             message.content,
+            tool_call_id,
             message.created_at
         )
         .execute(&self.pool)
@@ -126,7 +128,7 @@ impl ConversationRepository for PgConversationRepository {
 
         let rows = sqlx::query!(
             r#"
-            SELECT id, conversation_id, role, content, created_at
+            SELECT id, conversation_id, role, content, tool_call_id, created_at
             FROM messages
             WHERE conversation_id = $1
             ORDER BY created_at DESC
@@ -152,6 +154,7 @@ impl ConversationRepository for PgConversationRepository {
                     conversation_id: ConversationId::from_uuid(r.conversation_id),
                     role,
                     content: r.content,
+                    tool_call_id: r.tool_call_id.map(ToolCallId::new),
                     created_at: r.created_at,
                 })
             })

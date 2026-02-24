@@ -5,8 +5,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use sandakan::application::ports::{
-    Embedder, EmbedderError, EvalEventError, EvalEventRepository, EvalOutboxError,
+    AgentMessage, Embedder, EmbedderError, EvalEventError, EvalEventRepository, EvalOutboxError,
     EvalOutboxRepository, EvalResultError, EvalResultRepository, LlmClient, LlmClientError,
+    LlmToolResponse, ToolSchema,
 };
 use sandakan::application::services::EvalWorker;
 use sandakan::domain::{
@@ -54,6 +55,14 @@ impl LlmClient for HighFaithfulnessJudge {
             Ok("0.95".to_string())
         })))
     }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        unimplemented!()
+    }
 }
 
 /// Judge that returns an unparseable score.
@@ -76,6 +85,14 @@ impl LlmClient for InvalidScoreJudge {
         >,
         LlmClientError,
     > {
+        unimplemented!()
+    }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
         unimplemented!()
     }
 }

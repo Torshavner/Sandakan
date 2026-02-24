@@ -1,4 +1,6 @@
-use sandakan::application::ports::{Embedder, EmbedderError, LlmClient, LlmClientError};
+use sandakan::application::ports::{
+    AgentMessage, Embedder, EmbedderError, LlmClient, LlmClientError, LlmToolResponse, ToolSchema,
+};
 use sandakan::application::services::eval_metrics::{
     compute_context_recall, compute_correctness, compute_faithfulness,
 };
@@ -57,6 +59,14 @@ impl LlmClient for MockJudge {
         Ok(Box::pin(futures::stream::once(async {
             Ok("0.9".to_string())
         })))
+    }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        unimplemented!()
     }
 }
 

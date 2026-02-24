@@ -1,3 +1,4 @@
+mod agent;
 mod chat;
 mod health;
 mod ingest;
@@ -7,6 +8,7 @@ mod models;
 pub mod openai_types;
 mod query;
 
+pub use agent::agent_chat_handler;
 pub use chat::chat_completions_handler;
 pub use health::health_handler;
 pub use ingest::ingest_handler;

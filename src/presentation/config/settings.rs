@@ -14,6 +14,8 @@ pub struct Settings {
     pub rag: RagSettings,
     #[serde(default)]
     pub eval: EvalSettings,
+    #[serde(default)]
+    pub agent: AgentSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,6 +238,49 @@ impl Default for EvalSettings {
             correctness_threshold: default_correctness_threshold(),
             worker_poll_interval_secs: default_poll_interval(),
             worker_batch_size: default_batch_size(),
+        }
+    }
+}
+
+// ─── Agent settings ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
+    #[serde(default)]
+    pub web_search: Option<WebSearchSettings>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebSearchSettings {
+    pub api_key: String,
+    #[serde(default = "default_search_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_search_max_results")]
+    pub max_results: usize,
+}
+
+fn default_max_iterations() -> usize {
+    10
+}
+
+fn default_search_endpoint() -> String {
+    "https://api.search.brave.com/res/v1/web/search".to_string()
+}
+
+fn default_search_max_results() -> usize {
+    5
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_iterations: default_max_iterations(),
+            web_search: None,
         }
     }
 }

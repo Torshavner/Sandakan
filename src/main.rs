@@ -10,9 +10,11 @@ use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
 };
+use sandakan::application::ports::McpClientPort;
 use sandakan::application::services::{
-    EvalWorker, IngestionService, IngestionWorker, RetrievalService,
+    AgentService, AgentServicePort, EvalWorker, IngestionService, IngestionWorker, RetrievalService,
 };
+use sandakan::infrastructure::mcp::{StandardMcpAdapter, ToolHandler};
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
     FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
@@ -24,6 +26,7 @@ use sandakan::infrastructure::persistence::{
     PgEvalResultRepository, PgJobRepository, QdrantAdapter, create_pool,
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
+use sandakan::infrastructure::tools::{StaticToolRegistry, WebSearchAdapter, WebSearchConfig};
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
@@ -252,6 +255,9 @@ async fn main() -> anyhow::Result<()> {
         settings.rag.fallback_message.clone(),
     ));
 
+    let agent_eval_event_repo = eval_event_repo.clone();
+    let agent_eval_outbox_repo = eval_outbox_repo.clone();
+
     if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
         let result_repo: Arc<dyn EvalResultRepository> =
             Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
@@ -279,6 +285,45 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Eval feature disabled");
     }
 
+    let agent_service: Option<Arc<dyn AgentServicePort>> = if settings.agent.enabled {
+        let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();
+        let mut schemas = Vec::new();
+
+        if let Some(ws_config) = &settings.agent.web_search {
+            let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
+                api_key: ws_config.api_key.clone(),
+                endpoint: ws_config.endpoint.clone(),
+                max_results: ws_config.max_results,
+            }));
+            schemas.push(WebSearchAdapter::tool_schema());
+            handlers.push(adapter as Arc<dyn ToolHandler>);
+        }
+
+        let mcp_client = Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>;
+        let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
+        let agent_model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
+
+        let svc = Arc::new(AgentService::new(
+            llm_client.clone() as Arc<dyn LlmClient>,
+            mcp_client,
+            tool_registry,
+            Arc::clone(&conversation_repository),
+            agent_eval_event_repo,
+            agent_eval_outbox_repo,
+            agent_model_config,
+            settings.agent.max_iterations,
+        ));
+
+        tracing::info!(
+            max_iterations = settings.agent.max_iterations,
+            "AgentService initialized"
+        );
+        Some(svc as Arc<dyn AgentServicePort>)
+    } else {
+        tracing::info!("Agent feature disabled");
+        None
+    };
+
     let state = AppState {
         ingestion_service,
         retrieval_service,
@@ -286,6 +331,7 @@ async fn main() -> anyhow::Result<()> {
         job_repository,
         ingestion_sender,
         staging_store,
+        agent_service,
         settings: settings.clone(),
     };
 

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::{LlmClient, LlmClientError};
+use crate::application::ports::{AgentMessage, LlmClient, LlmClientError, LlmToolResponse, ToolSchema};
 
 pub struct OpenAiClient {
     client: Client,
@@ -70,6 +70,16 @@ impl LlmClient for OpenAiClient {
     ) -> Result<crate::application::ports::LlmTokenStream, LlmClientError> {
         Err(LlmClientError::InvalidResponse(
             "streaming not supported in legacy OpenAiClient".to_string(),
+        ))
+    }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        Err(LlmClientError::InvalidResponse(
+            "complete_with_tools not supported in legacy OpenAiClient".to_string(),
         ))
     }
 
