@@ -9,7 +9,7 @@ use sandakan::application::ports::{
     ToolSchema,
 };
 use sandakan::application::services::{
-    AgentChatRequest, AgentError, AgentService, AgentServicePort,
+    AgentChatRequest, AgentError, AgentService, AgentServiceConfig, AgentServicePort,
 };
 use sandakan::domain::{
     Conversation, ConversationId, EvalSource, Message, ToolCall, ToolCallId, ToolName, ToolResult,
@@ -194,6 +194,15 @@ impl ConversationRepository for MockConversationRepository {
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
+fn default_config() -> AgentServiceConfig {
+    AgentServiceConfig {
+        model_config: "test/model".to_string(),
+        max_iterations: 3,
+        tool_timeout_secs: 30,
+        tool_fail_fast: false,
+    }
+}
+
 fn build_service(llm: Arc<dyn LlmClient>, mcp: Arc<dyn McpClientPort>) -> AgentService {
     AgentService::new(
         llm,
@@ -202,9 +211,25 @@ fn build_service(llm: Arc<dyn LlmClient>, mcp: Arc<dyn McpClientPort>) -> AgentS
         Arc::new(MockConversationRepository),
         None,
         None,
-        None, // rag_source_collector
-        "test/model".to_string(),
-        3,
+        None,
+        default_config(),
+    )
+}
+
+fn build_service_with_config(
+    llm: Arc<dyn LlmClient>,
+    mcp: Arc<dyn McpClientPort>,
+    config: AgentServiceConfig,
+) -> AgentService {
+    AgentService::new(
+        llm,
+        mcp,
+        Arc::new(MockToolRegistry),
+        Arc::new(MockConversationRepository),
+        None,
+        None,
+        None,
+        config,
     )
 }
 
@@ -221,8 +246,7 @@ fn build_service_with_collector(
         None,
         None,
         Some(collector),
-        "test/model".to_string(),
-        3,
+        default_config(),
     )
 }
 
@@ -275,17 +299,24 @@ async fn given_llm_always_returns_tool_calls_when_chatting_then_returns_max_iter
 }
 
 #[tokio::test]
-async fn given_mcp_client_fails_when_executing_tool_then_agent_returns_tool_error() {
+async fn given_mcp_client_fails_when_fail_fast_true_then_agent_returns_hard_tool_error() {
     let llm = Arc::new(MockLlmToolThenContent::new());
     let mcp = Arc::new(MockMcpFailing);
-    let service = build_service(llm, mcp);
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_fail_fast: true,
+            ..default_config()
+        },
+    );
 
-    let request = AgentChatRequest {
-        conversation_id: None,
-        user_message: "Search something".to_string(),
-    };
-
-    let result = service.chat(request).await;
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Search something".to_string(),
+        })
+        .await;
     let err = result.err();
     assert!(
         matches!(err, Some(AgentError::Tool(_))),
@@ -438,7 +469,8 @@ async fn given_llm_returns_two_tool_calls_when_executing_then_both_results_appea
 }
 
 #[tokio::test]
-async fn given_one_of_two_parallel_tool_calls_fails_when_executing_then_agent_returns_tool_error() {
+async fn given_one_of_two_parallel_tool_calls_fails_when_fail_fast_true_then_agent_returns_tool_error()
+ {
     // MCP that fails for "lookup" but succeeds for "search".
     struct MockMcpPartialFail;
     #[async_trait::async_trait]
@@ -458,7 +490,15 @@ async fn given_one_of_two_parallel_tool_calls_fails_when_executing_then_agent_re
 
     let llm = Arc::new(MockLlmTwoParallelToolsThenContent::new());
     let mcp = Arc::new(MockMcpPartialFail);
-    let service = build_service(llm, mcp);
+    // fail_fast = true: the first failing tool aborts the turn.
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_fail_fast: true,
+            ..default_config()
+        },
+    );
 
     let result = service
         .chat(AgentChatRequest {
@@ -657,4 +697,299 @@ async fn given_llm_returns_content_when_chatting_then_token_stream_yields_real_t
     assert!(!tokens.is_empty(), "token stream should not be empty");
     let full = tokens.join("");
     assert_eq!(full, "Direct answer");
+}
+
+// ─── US-027: soft-fail and timeout tests ─────────────────────────────────────
+
+#[tokio::test]
+async fn given_tool_fails_with_execution_error_when_fail_fast_false_then_agent_continues_and_returns_content()
+ {
+    // fail_fast = false (default): error becomes a [tool_error] ToolResult and
+    // the LLM gets a second chance to produce a Content response.
+    let llm = Arc::new(MockLlmToolThenContent::new());
+    let mcp = Arc::new(MockMcpFailing);
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_fail_fast: false,
+            ..default_config()
+        },
+    );
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Search something".to_string(),
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Expected Ok when fail_fast=false, got: {:?}",
+        result.err()
+    );
+
+    let mut response = result.unwrap();
+    let mut collected = String::new();
+    while let Some(tok) = futures::StreamExt::next(&mut response.token_stream).await {
+        collected.push_str(&tok.unwrap());
+    }
+    assert_eq!(collected, "Final agent answer");
+}
+
+#[tokio::test]
+async fn given_tool_exceeds_timeout_when_fail_fast_false_then_agent_sees_timeout_marker_in_tool_result()
+ {
+    // A mock MCP that hangs for longer than the configured timeout.
+    struct MockMcpHanging;
+    #[async_trait::async_trait]
+    impl McpClientPort for MockMcpHanging {
+        async fn call_tool(&self, _call: &ToolCall) -> Result<ToolResult, McpError> {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Err(McpError::ExecutionFailed("never".to_string()))
+        }
+    }
+
+    // A mock LLM that checks for the [tool_timeout] marker in the second call.
+    struct MockLlmAssertTimeoutMarker {
+        call_count: std::sync::atomic::AtomicU32,
+    }
+    #[async_trait::async_trait]
+    impl LlmClient for MockLlmAssertTimeoutMarker {
+        async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+            Ok(String::new())
+        }
+        async fn complete_stream(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+        async fn complete_stream_with_messages(
+            &self,
+            _: &[AgentMessage],
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::once(async {
+                Ok("recovered answer".to_string())
+            })))
+        }
+        async fn complete_with_tools(
+            &self,
+            messages: &[AgentMessage],
+            _: &[ToolSchema],
+        ) -> Result<LlmToolResponse, LlmClientError> {
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count == 0 {
+                Ok(LlmToolResponse::ToolCalls(vec![ToolCall {
+                    id: ToolCallId::new("call_slow"),
+                    name: ToolName::new("slow_tool"),
+                    arguments: serde_json::json!({}),
+                }]))
+            } else {
+                // Verify the [tool_timeout] marker reached the LLM context.
+                let has_marker = messages.iter().any(|m| {
+                    if let AgentMessage::ToolResult(r) = m {
+                        r.content.starts_with("[tool_timeout]")
+                    } else {
+                        false
+                    }
+                });
+                assert!(has_marker, "LLM context must contain [tool_timeout] marker");
+                Ok(LlmToolResponse::Content("recovered answer".to_string()))
+            }
+        }
+    }
+
+    let llm = Arc::new(MockLlmAssertTimeoutMarker {
+        call_count: std::sync::atomic::AtomicU32::new(0),
+    });
+    let mcp = Arc::new(MockMcpHanging);
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_timeout_secs: 1, // short timeout so the test is fast
+            tool_fail_fast: false,
+            ..default_config()
+        },
+    );
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Call a slow tool".to_string(),
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Expected Ok after timeout soft-fail, got: {:?}",
+        result.err()
+    );
+}
+
+#[tokio::test]
+async fn given_tool_not_found_when_fail_fast_false_then_agent_still_returns_hard_error() {
+    struct MockMcpToolNotFound;
+    #[async_trait::async_trait]
+    impl McpClientPort for MockMcpToolNotFound {
+        async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+            Err(McpError::ToolNotFound(call.name.to_string()))
+        }
+    }
+
+    let llm = Arc::new(MockLlmToolThenContent::new());
+    let mcp = Arc::new(MockMcpToolNotFound);
+    // fail_fast is false — ToolNotFound must still hard-fail regardless.
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_fail_fast: false,
+            ..default_config()
+        },
+    );
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Use missing tool".to_string(),
+        })
+        .await;
+
+    let err = result.err();
+    assert!(
+        matches!(err, Some(AgentError::Tool(_))),
+        "ToolNotFound must always hard-fail, got: {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn given_one_of_two_parallel_tools_fails_when_fail_fast_false_then_other_result_included_in_history()
+ {
+    // MCP: "search" succeeds, "lookup" fails with ExecutionFailed.
+    struct MockMcpOneFailOneSuccess;
+    #[async_trait::async_trait]
+    impl McpClientPort for MockMcpOneFailOneSuccess {
+        async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+            if call.name.as_str() == "lookup" {
+                Err(McpError::ExecutionFailed("lookup down".to_string()))
+            } else {
+                Ok(ToolResult {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    content: "search ok".to_string(),
+                })
+            }
+        }
+    }
+
+    // LLM that verifies both ToolResult messages are in history on the second call.
+    struct MockLlmAssertBothResults {
+        call_count: std::sync::atomic::AtomicU32,
+    }
+    #[async_trait::async_trait]
+    impl LlmClient for MockLlmAssertBothResults {
+        async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+            Ok(String::new())
+        }
+        async fn complete_stream(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+        async fn complete_stream_with_messages(
+            &self,
+            _: &[AgentMessage],
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::once(async {
+                Ok("parallel soft-fail answer".to_string())
+            })))
+        }
+        async fn complete_with_tools(
+            &self,
+            messages: &[AgentMessage],
+            _: &[ToolSchema],
+        ) -> Result<LlmToolResponse, LlmClientError> {
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count == 0 {
+                Ok(LlmToolResponse::ToolCalls(vec![
+                    ToolCall {
+                        id: ToolCallId::new("call_a"),
+                        name: ToolName::new("search"),
+                        arguments: serde_json::json!({"query": "alpha"}),
+                    },
+                    ToolCall {
+                        id: ToolCallId::new("call_b"),
+                        name: ToolName::new("lookup"),
+                        arguments: serde_json::json!({"key": "beta"}),
+                    },
+                ]))
+            } else {
+                // Both ToolResult messages must be in the history.
+                let tool_results: Vec<_> = messages
+                    .iter()
+                    .filter_map(|m| {
+                        if let AgentMessage::ToolResult(r) = m {
+                            Some(r.content.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                assert_eq!(
+                    tool_results.len(),
+                    2,
+                    "both tool results must be in history"
+                );
+                let has_success = tool_results.iter().any(|c| c == "search ok");
+                let has_error = tool_results.iter().any(|c| c.starts_with("[tool_error]"));
+                assert!(has_success, "successful tool result must be present");
+                assert!(
+                    has_error,
+                    "failed tool result must carry [tool_error] prefix"
+                );
+
+                Ok(LlmToolResponse::Content(
+                    "parallel soft-fail answer".to_string(),
+                ))
+            }
+        }
+    }
+
+    let llm = Arc::new(MockLlmAssertBothResults {
+        call_count: std::sync::atomic::AtomicU32::new(0),
+    });
+    let mcp = Arc::new(MockMcpOneFailOneSuccess);
+    let service = build_service_with_config(
+        llm,
+        mcp,
+        AgentServiceConfig {
+            tool_fail_fast: false,
+            ..default_config()
+        },
+    );
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Two parallel tools, one fails".to_string(),
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Expected Ok with soft-fail, got: {:?}",
+        result.err()
+    );
 }

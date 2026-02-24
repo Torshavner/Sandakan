@@ -14,7 +14,8 @@ use sandakan::application::ports::{
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
 };
 use sandakan::application::services::{
-    AgentService, AgentServicePort, EvalWorker, IngestionService, IngestionWorker, RetrievalService,
+    AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
+    IngestionWorker, RetrievalService,
 };
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
@@ -307,9 +308,6 @@ async fn main() -> anyhow::Result<()> {
             handlers.push(adapter as Arc<dyn ToolHandler>);
         }
 
-        // Create the side-channel source collector only when both rag_search and
-        // eval are enabled. The Arc is cloned: writer end → RagSearchAdapter,
-        // reader end → AgentService.
         let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
             if settings.agent.rag_search_enabled && settings.eval.enabled {
                 Some(Arc::new(InMemoryRagSourceCollector::new()))
@@ -387,8 +385,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // If wire servers are configured, use a composite router that tries each
-        // in order before the compiled-in `StandardMcpAdapter`.
         let mcp_client: Arc<dyn McpClientPort> = if wire_clients.is_empty() {
             Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
         } else {
@@ -401,6 +397,13 @@ async fn main() -> anyhow::Result<()> {
         let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
         let agent_model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
 
+        let agent_config = AgentServiceConfig {
+            model_config: agent_model_config,
+            max_iterations: settings.agent.max_iterations,
+            tool_timeout_secs: settings.agent.tool_timeout_secs,
+            tool_fail_fast: settings.agent.tool_fail_fast,
+        };
+
         let svc = Arc::new(AgentService::new(
             llm_client.clone() as Arc<dyn LlmClient>,
             mcp_client,
@@ -409,12 +412,13 @@ async fn main() -> anyhow::Result<()> {
             agent_eval_event_repo,
             agent_eval_outbox_repo,
             rag_source_collector,
-            agent_model_config,
-            settings.agent.max_iterations,
+            agent_config,
         ));
 
         tracing::info!(
             max_iterations = settings.agent.max_iterations,
+            tool_timeout_secs = settings.agent.tool_timeout_secs,
+            tool_fail_fast = settings.agent.tool_fail_fast,
             "AgentService initialized"
         );
         Some(svc as Arc<dyn AgentServicePort>)

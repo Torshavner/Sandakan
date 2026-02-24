@@ -1,5 +1,6 @@
 // @AI-BYPASS-LENGTH
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::join_all;
@@ -73,6 +74,19 @@ pub trait AgentServicePort: Send + Sync {
     async fn chat(&self, request: AgentChatRequest) -> Result<AgentChatResponse, AgentError>;
 }
 
+// ─── Service config ───────────────────────────────────────────────────────────
+
+pub struct AgentServiceConfig {
+    pub model_config: String,
+    pub max_iterations: usize,
+    /// Per-tool call timeout. A timed-out tool is surfaced as a `[tool_timeout]`
+    /// ToolResult rather than aborting the whole agent turn.
+    pub tool_timeout_secs: u64,
+    /// When `true`, any tool error (except `ToolNotFound`) hard-fails the turn.
+    /// When `false` (default), errors are surfaced as `[tool_error]` ToolResults.
+    pub tool_fail_fast: bool,
+}
+
 // ─── Concrete service ─────────────────────────────────────────────────────────
 
 pub struct AgentService {
@@ -83,12 +97,10 @@ pub struct AgentService {
     eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
     rag_source_collector: Option<Arc<dyn RagSourceCollector>>,
-    model_config: String,
-    max_iterations: usize,
+    config: AgentServiceConfig,
 }
 
 impl AgentService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         llm_client: Arc<dyn LlmClient>,
         mcp_client: Arc<dyn McpClientPort>,
@@ -97,8 +109,7 @@ impl AgentService {
         eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
         eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
         rag_source_collector: Option<Arc<dyn RagSourceCollector>>,
-        model_config: String,
-        max_iterations: usize,
+        config: AgentServiceConfig,
     ) -> Self {
         Self {
             llm_client,
@@ -108,8 +119,7 @@ impl AgentService {
             eval_event_repository,
             eval_outbox_repository,
             rag_source_collector,
-            model_config,
-            max_iterations,
+            config,
         }
     }
 
@@ -136,8 +146,9 @@ impl AgentService {
 
         let tools = self.tool_registry.list_tools();
         let mut _state = AgentState::Thinking;
+        let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
 
-        for iteration in 0..self.max_iterations {
+        for iteration in 0..self.config.max_iterations {
             // Discard send errors — the handler may have disconnected.
             let _ = progress_tx.try_send(AgentProgressEvent::Thinking { iteration });
 
@@ -162,20 +173,44 @@ impl AgentService {
                         });
                     }
 
-                    // Execute all tool calls concurrently; propagate the first error.
-                    let results: Vec<_> =
-                        join_all(calls.iter().map(|call| self.mcp_client.call_tool(call))).await;
+                    // Execute all tool calls concurrently with per-call timeouts.
+                    let outcomes: Vec<_> = join_all(calls.iter().map(|call| {
+                        tokio::time::timeout(timeout_dur, self.mcp_client.call_tool(call))
+                    }))
+                    .await;
 
-                    for result in results {
-                        let result = result.map_err(AgentError::from)?;
+                    for (call, outcome) in calls.iter().zip(outcomes) {
+                        let tool_result = match outcome {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(McpError::ToolNotFound(n))) => {
+                                // A missing tool is always a hard error regardless of fail_fast.
+                                return Err(AgentError::Tool(format!("tool not found: {n}")));
+                            }
+                            Ok(Err(e)) if self.config.tool_fail_fast => {
+                                return Err(AgentError::from(e));
+                            }
+                            Ok(Err(e)) => crate::domain::ToolResult {
+                                tool_call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                content: format!("[tool_error] {}: {e}", call.name),
+                            },
+                            Err(_elapsed) => crate::domain::ToolResult {
+                                tool_call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                content: format!(
+                                    "[tool_timeout] {} did not respond within {}s",
+                                    call.name, self.config.tool_timeout_secs
+                                ),
+                            },
+                        };
 
-                        let truncated = truncate_for_event(&result.content, 120);
+                        let truncated = truncate_for_event(&tool_result.content, 120);
                         let _ = progress_tx.try_send(AgentProgressEvent::ToolResult {
-                            name: result.tool_name.to_string(),
+                            name: tool_result.tool_name.to_string(),
                             truncated_content: truncated,
                         });
 
-                        messages.push(AgentMessage::ToolResult(result));
+                        messages.push(AgentMessage::ToolResult(tool_result));
                     }
 
                     _state = AgentState::Thinking;
@@ -188,7 +223,9 @@ impl AgentService {
             }
         }
 
-        Err(AgentError::MaxIterationsExceeded(self.max_iterations))
+        Err(AgentError::MaxIterationsExceeded(
+            self.config.max_iterations,
+        ))
     }
 
     async fn persist_turn(
@@ -223,7 +260,7 @@ impl AgentService {
                 .map(|c| c.drain())
                 .unwrap_or_default();
 
-            let eval_event = EvalEvent::new(question, answer, sources, &self.model_config);
+            let eval_event = EvalEvent::new(question, answer, sources, &self.config.model_config);
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             tokio::spawn(async move {

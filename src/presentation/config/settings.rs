@@ -250,6 +250,10 @@ pub struct AgentSettings {
     pub enabled: bool,
     #[serde(default = "default_max_iterations")]
     pub max_iterations: usize,
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+    #[serde(default)]
+    pub tool_fail_fast: bool,
     #[serde(default)]
     pub web_search: Option<WebSearchSettings>,
     #[serde(default)]
@@ -334,6 +338,10 @@ fn default_max_iterations() -> usize {
     10
 }
 
+fn default_tool_timeout_secs() -> u64 {
+    30
+}
+
 fn default_search_endpoint() -> String {
     "https://api.search.brave.com/res/v1/web/search".to_string()
 }
@@ -347,6 +355,8 @@ impl Default for AgentSettings {
         Self {
             enabled: false,
             max_iterations: default_max_iterations(),
+            tool_timeout_secs: default_tool_timeout_secs(),
+            tool_fail_fast: false,
             web_search: None,
             rag_search_enabled: false,
             notification: None,
