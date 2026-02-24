@@ -82,7 +82,10 @@ impl ConversationRepository for PgConversationRepository {
         let message_id = message.id.as_uuid();
         let conversation_id = message.conversation_id.as_uuid();
         let role = message.role.as_str();
-        let tool_call_id = message.tool_call_id.as_ref().map(|id| id.as_str().to_string());
+        let tool_call_id = message
+            .tool_call_id
+            .as_ref()
+            .map(|id| id.as_str().to_string());
 
         sqlx::query!(
             r#"

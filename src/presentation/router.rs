@@ -58,10 +58,7 @@ where
             "/api/chat/completions",
             post(chat_completions_handler::<F, L, V, T>),
         )
-        .route(
-            "/api/v1/agent/chat",
-            post(agent_chat_handler::<F, L, V, T>),
-        );
+        .route("/api/v1/agent/chat", post(agent_chat_handler::<F, L, V, T>));
 
     router
         .layer(DefaultBodyLimit::max(max_upload_bytes))

@@ -1,3 +1,5 @@
+// @AI-BYPASS-LENGTH: all mocks and tests for AgentService live in one place to keep
+// mock wiring transparent; splitting would obscure the test intent.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -5,7 +7,9 @@ use sandakan::application::ports::{
     AgentMessage, ConversationRepository, LlmClient, LlmClientError, LlmTokenStream,
     LlmToolResponse, McpClientPort, McpError, RepositoryError, ToolRegistry, ToolSchema,
 };
-use sandakan::application::services::{AgentChatRequest, AgentError, AgentService, AgentServicePort};
+use sandakan::application::services::{
+    AgentChatRequest, AgentError, AgentService, AgentServicePort,
+};
 use sandakan::domain::{
     Conversation, ConversationId, Message, ToolCall, ToolCallId, ToolName, ToolResult,
 };
@@ -18,7 +22,9 @@ struct MockLlmToolThenContent {
 
 impl MockLlmToolThenContent {
     fn new() -> Self {
-        Self { call_count: AtomicU32::new(0) }
+        Self {
+            call_count: AtomicU32::new(0),
+        }
     }
 }
 
@@ -27,10 +33,16 @@ impl LlmClient for MockLlmToolThenContent {
     async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
         Ok(String::new())
     }
-    async fn complete_stream(
-        &self, _: &str, _: &str,
-    ) -> Result<LlmTokenStream, LlmClientError> {
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
         Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Final agent answer".to_string())
+        })))
     }
     async fn complete_with_tools(
         &self,
@@ -62,6 +74,12 @@ impl LlmClient for MockLlmAlwaysToolCall {
     async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
         Ok(Box::pin(futures::stream::empty()))
     }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
     async fn complete_with_tools(
         &self,
         _: &[AgentMessage],
@@ -86,6 +104,14 @@ impl LlmClient for MockLlmImmediateContent {
     }
     async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
         Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Direct answer".to_string())
+        })))
     }
     async fn complete_with_tools(
         &self,
@@ -183,7 +209,8 @@ fn build_service(llm: Arc<dyn LlmClient>, mcp: Arc<dyn McpClientPort>) -> AgentS
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn given_llm_returns_tool_call_then_content_when_chatting_then_react_loop_executes_and_returns_response() {
+async fn given_llm_returns_tool_call_then_content_when_chatting_then_react_loop_executes_and_returns_response()
+ {
     let llm = Arc::new(MockLlmToolThenContent::new());
     let mcp = Arc::new(MockMcpSuccess);
     let service = build_service(llm, mcp);
@@ -207,7 +234,8 @@ async fn given_llm_returns_tool_call_then_content_when_chatting_then_react_loop_
 }
 
 #[tokio::test]
-async fn given_llm_always_returns_tool_calls_when_chatting_then_returns_max_iterations_exceeded_error() {
+async fn given_llm_always_returns_tool_calls_when_chatting_then_returns_max_iterations_exceeded_error()
+ {
     let llm = Arc::new(MockLlmAlwaysToolCall);
     let mcp = Arc::new(MockMcpSuccess);
     let service = build_service(llm, mcp);
@@ -268,9 +296,185 @@ async fn given_llm_returns_content_immediately_when_chatting_then_no_progress_ev
     }
 
     // Should have exactly one Thinking event (iteration 0), no ToolCall/ToolResult.
-    assert_eq!(events.len(), 1, "Expected 1 Thinking event, got: {}", events.len());
+    assert_eq!(
+        events.len(),
+        1,
+        "Expected 1 Thinking event, got: {}",
+        events.len()
+    );
     assert!(
-        matches!(events[0], sandakan::application::services::AgentProgressEvent::Thinking { iteration: 0 }),
+        matches!(
+            events[0],
+            sandakan::application::services::AgentProgressEvent::Thinking { iteration: 0 }
+        ),
         "Expected Thinking {{ iteration: 0 }}"
     );
+}
+
+// ─── Mock: LLM returns two tool calls in one response, then Content ───────────
+
+struct MockLlmTwoParallelToolsThenContent {
+    call_count: AtomicU32,
+}
+
+impl MockLlmTwoParallelToolsThenContent {
+    fn new() -> Self {
+        Self {
+            call_count: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmTwoParallelToolsThenContent {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        Ok(String::new())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::iter(vec![
+            Ok("parallel ".to_string()),
+            Ok("answer".to_string()),
+        ])))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if count == 0 {
+            Ok(LlmToolResponse::ToolCalls(vec![
+                ToolCall {
+                    id: ToolCallId::new("call_a"),
+                    name: ToolName::new("search"),
+                    arguments: serde_json::json!({"query": "alpha"}),
+                },
+                ToolCall {
+                    id: ToolCallId::new("call_b"),
+                    name: ToolName::new("lookup"),
+                    arguments: serde_json::json!({"key": "beta"}),
+                },
+            ]))
+        } else {
+            Ok(LlmToolResponse::Content("parallel answer".to_string()))
+        }
+    }
+}
+
+// ─── Mock: MCP records execution order via atomic counter ────────────────────
+
+struct MockMcpOrderRecorder {
+    order: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl McpClientPort for MockMcpOrderRecorder {
+    async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+        self.order.lock().unwrap().push(call.name.to_string());
+        Ok(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: format!("result for {}", call.name),
+        })
+    }
+}
+
+#[tokio::test]
+async fn given_llm_returns_two_tool_calls_when_executing_then_both_results_appear_in_history() {
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let llm = Arc::new(MockLlmTwoParallelToolsThenContent::new());
+    let mcp = Arc::new(MockMcpOrderRecorder {
+        order: Arc::clone(&order),
+    });
+    let service = build_service(llm, mcp);
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Do two things".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    // Both tool calls were dispatched and their names recorded.
+    let executed = order.lock().unwrap().clone();
+    assert_eq!(executed.len(), 2, "both tools should have been called");
+    assert!(executed.contains(&"search".to_string()));
+    assert!(executed.contains(&"lookup".to_string()));
+
+    // Token stream should contain the final answer from complete_stream_with_messages.
+    let mut token_stream = result.token_stream;
+    let mut collected = String::new();
+    while let Some(tok) = futures::StreamExt::next(&mut token_stream).await {
+        collected.push_str(&tok.unwrap());
+    }
+    assert_eq!(collected, "parallel answer");
+}
+
+#[tokio::test]
+async fn given_one_of_two_parallel_tool_calls_fails_when_executing_then_agent_returns_tool_error() {
+    // MCP that fails for "lookup" but succeeds for "search".
+    struct MockMcpPartialFail;
+    #[async_trait::async_trait]
+    impl McpClientPort for MockMcpPartialFail {
+        async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+            if call.name.as_str() == "lookup" {
+                Err(McpError::ExecutionFailed("lookup failed".to_string()))
+            } else {
+                Ok(ToolResult {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    content: "ok".to_string(),
+                })
+            }
+        }
+    }
+
+    let llm = Arc::new(MockLlmTwoParallelToolsThenContent::new());
+    let mcp = Arc::new(MockMcpPartialFail);
+    let service = build_service(llm, mcp);
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Do two things, one will fail".to_string(),
+        })
+        .await;
+
+    assert!(
+        matches!(result, Err(AgentError::Tool(_))),
+        "expected Err(Tool(_))"
+    );
+}
+
+#[tokio::test]
+async fn given_llm_returns_content_when_chatting_then_token_stream_yields_real_tokens() {
+    let llm = Arc::new(MockLlmImmediateContent);
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service(llm, mcp);
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Stream me an answer".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut tokens: Vec<String> = Vec::new();
+    while let Some(tok) = futures::StreamExt::next(&mut response.token_stream).await {
+        tokens.push(tok.unwrap());
+    }
+
+    // The mock streams one token; the important invariant is that it is
+    // non-empty and carries real content (not a single-chunk buffered string).
+    assert!(!tokens.is_empty(), "token stream should not be empty");
+    let full = tokens.join("");
+    assert_eq!(full, "Direct answer");
 }

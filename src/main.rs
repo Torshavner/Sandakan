@@ -6,32 +6,34 @@ use config::Environment as EnvironmentSource;
 use config::{Config, File};
 use tokio::net::TcpListener;
 
+use sandakan::application::ports::McpClientPort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
 };
-use sandakan::application::ports::McpClientPort;
 use sandakan::application::services::{
     AgentService, AgentServicePort, EvalWorker, IngestionService, IngestionWorker, RetrievalService,
 };
-use sandakan::infrastructure::mcp::{StandardMcpAdapter, ToolHandler};
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
     FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
 };
 use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
+use sandakan::infrastructure::mcp::{
+    CompositeMcpClient, SseMcpClient, StandardMcpAdapter, StdioMcpClient, ToolHandler,
+};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
     PgConversationRepository, PgEvalEventRepository, PgEvalOutboxRepository,
     PgEvalResultRepository, PgJobRepository, QdrantAdapter, create_pool,
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
-use sandakan::infrastructure::tools::{StaticToolRegistry, WebSearchAdapter, WebSearchConfig};
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
+use sandakan::infrastructure::tools::{StaticToolRegistry, WebSearchAdapter, WebSearchConfig};
 use sandakan::presentation::{
-    AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
+    AppState, Environment, McpServerConfig, Settings, TranscriptionProviderSetting, create_router,
 };
 
 const INGESTION_CHANNEL_CAPACITY: usize = 64;
@@ -299,7 +301,59 @@ async fn main() -> anyhow::Result<()> {
             handlers.push(adapter as Arc<dyn ToolHandler>);
         }
 
-        let mcp_client = Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>;
+        // Build a composite MCP client: one entry per configured wire server.
+        // Each wire client is wrapped in a `WireMcpRouter` that tries it before
+        // falling back to `StandardMcpAdapter` (for compiled-in handlers).
+        let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
+
+        for server_cfg in &settings.agent.mcp_servers {
+            match server_cfg {
+                McpServerConfig::Stdio(cfg) => {
+                    tracing::info!(
+                        name = %cfg.name,
+                        command = %cfg.command,
+                        "Connecting to stdio MCP server"
+                    );
+                    match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
+                        Ok(client) => {
+                            schemas.extend(client.tool_schemas.clone());
+                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                        }
+                        Err(e) => {
+                            tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
+                        }
+                    }
+                }
+                McpServerConfig::Sse(cfg) => {
+                    tracing::info!(
+                        name = %cfg.name,
+                        endpoint = %cfg.endpoint,
+                        "Connecting to SSE MCP server"
+                    );
+                    match SseMcpClient::new(&cfg.endpoint).await {
+                        Ok(client) => {
+                            schemas.extend(client.tool_schemas.clone());
+                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                        }
+                        Err(e) => {
+                            tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
+                        }
+                    }
+                }
+            }
+        }
+
+        // If wire servers are configured, use a composite router that tries each
+        // in order before the compiled-in `StandardMcpAdapter`.
+        let mcp_client: Arc<dyn McpClientPort> = if wire_clients.is_empty() {
+            Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
+        } else {
+            Arc::new(CompositeMcpClient::new(
+                wire_clients,
+                StandardMcpAdapter::new(handlers),
+            )) as Arc<dyn McpClientPort>
+        };
+
         let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
         let agent_model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
 

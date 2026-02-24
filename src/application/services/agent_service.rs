@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::stream;
+use futures::future::join_all;
 
 use crate::application::ports::{
     AgentMessage, ConversationRepository, EvalEventRepository, EvalOutboxRepository, LlmClient,
@@ -22,9 +22,7 @@ pub struct AgentChatRequest {
 
 pub struct AgentChatResponse {
     pub progress_rx: tokio::sync::mpsc::Receiver<AgentProgressEvent>,
-    /// Single-chunk stream containing the final LLM answer.
-    ///
-    /// TODO: US-022 — replace with a real token-by-token streaming call.
+    /// Real token-by-token stream of the final LLM answer.
     pub token_stream: LlmTokenStream,
     pub conversation_id: ConversationId,
 }
@@ -34,9 +32,16 @@ pub struct AgentChatResponse {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentProgressEvent {
-    Thinking { iteration: usize },
-    ToolCall { name: String },
-    ToolResult { name: String, truncated_content: String },
+    Thinking {
+        iteration: usize,
+    },
+    ToolCall {
+        name: String,
+    },
+    ToolResult {
+        name: String,
+        truncated_content: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -107,13 +112,18 @@ impl AgentService {
         }
     }
 
+    /// Runs the ReAct loop and returns `(buffered_answer, final_messages)`.
+    ///
+    /// `final_messages` includes the full conversation history up to and
+    /// including the last user turn; the caller uses it to produce a real
+    /// token-by-token stream via `complete_stream_with_messages`.
     #[tracing::instrument(skip(self), fields(conversation_id))]
     async fn run_react_loop(
         &self,
         user_message: String,
         conversation_id: ConversationId,
         progress_tx: &tokio::sync::mpsc::Sender<AgentProgressEvent>,
-    ) -> Result<String, AgentError> {
+    ) -> Result<(String, Vec<AgentMessage>), AgentError> {
         let history = self
             .conversation_repository
             .get_messages(conversation_id, 50)
@@ -128,8 +138,7 @@ impl AgentService {
 
         for iteration in 0..self.max_iterations {
             // Discard send errors — the handler may have disconnected.
-            let _ = progress_tx
-                .try_send(AgentProgressEvent::Thinking { iteration });
+            let _ = progress_tx.try_send(AgentProgressEvent::Thinking { iteration });
 
             match self
                 .llm_client
@@ -145,14 +154,19 @@ impl AgentService {
                         tool_calls: calls.clone(),
                     });
 
-                    // Execute each tool call sequentially.
-                    // TODO: US-022 — parallelise with futures::future::join_all().
+                    // Emit ToolCall progress events before dispatching.
                     for call in &calls {
                         let _ = progress_tx.try_send(AgentProgressEvent::ToolCall {
                             name: call.name.to_string(),
                         });
+                    }
 
-                        let result = self.mcp_client.call_tool(call).await?;
+                    // Execute all tool calls concurrently; propagate the first error.
+                    let results: Vec<_> =
+                        join_all(calls.iter().map(|call| self.mcp_client.call_tool(call))).await;
+
+                    for result in results {
+                        let result = result.map_err(AgentError::from)?;
 
                         let truncated = truncate_for_event(&result.content, 120);
                         let _ = progress_tx.try_send(AgentProgressEvent::ToolResult {
@@ -168,7 +182,7 @@ impl AgentService {
 
                 LlmToolResponse::Content(answer) => {
                     _state = AgentState::YieldingResponse;
-                    return Ok(answer);
+                    return Ok((answer, messages));
                 }
             }
         }
@@ -182,22 +196,11 @@ impl AgentService {
         user_message: &str,
         answer: &str,
     ) {
-        let user_msg = Message::new(
-            conversation_id,
-            MessageRole::User,
-            user_message.to_string(),
-        );
-        let assistant_msg = Message::new(
-            conversation_id,
-            MessageRole::Assistant,
-            answer.to_string(),
-        );
+        let user_msg = Message::new(conversation_id, MessageRole::User, user_message.to_string());
+        let assistant_msg =
+            Message::new(conversation_id, MessageRole::Assistant, answer.to_string());
 
-        if let Err(e) = self
-            .conversation_repository
-            .append_message(&user_msg)
-            .await
-        {
+        if let Err(e) = self.conversation_repository.append_message(&user_msg).await {
             tracing::warn!(error = %e, "Failed to persist agent user message");
         }
         if let Err(e) = self
@@ -213,7 +216,12 @@ impl AgentService {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
-            let eval_event = EvalEvent::new(question, answer, Vec::<EvalSource>::new(), &self.model_config);
+            let eval_event = EvalEvent::new(
+                question,
+                answer,
+                Vec::<EvalSource>::new(),
+                &self.model_config,
+            );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             tokio::spawn(async move {
@@ -252,7 +260,7 @@ impl AgentServicePort for AgentService {
         // Bounded channel — progress events are cheap and numerous, 64 slots is ample.
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(64);
 
-        let answer = self
+        let (answer, final_messages) = self
             .run_react_loop(request.user_message.clone(), conversation_id, &progress_tx)
             .await?;
 
@@ -264,10 +272,13 @@ impl AgentServicePort for AgentService {
 
         self.fire_and_forget_eval(&request.user_message, &answer);
 
-        // Wrap the answer in a single-chunk stream.
-        // TODO: US-022 — replace with real token-by-token streaming via a second LLM call.
-        let token_stream: LlmTokenStream =
-            Box::pin(stream::once(async move { Ok::<String, LlmClientError>(answer) }));
+        // Stream the final answer token-by-token using the full conversation history.
+        // The buffered `answer` above is used only for persistence; the streaming
+        // call independently produces the SSE token output seen by the client.
+        let token_stream: LlmTokenStream = self
+            .llm_client
+            .complete_stream_with_messages(&final_messages)
+            .await?;
 
         Ok(AgentChatResponse {
             progress_rx,

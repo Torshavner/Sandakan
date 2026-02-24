@@ -10,6 +10,12 @@ pub enum McpError {
     ExecutionFailed(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("transport error: {0}")]
+    Transport(String),
+    #[error("protocol error: {0}")]
+    Protocol(String),
+    #[error("MCP server process exited unexpectedly")]
+    ServerExited,
 }
 
 #[async_trait]

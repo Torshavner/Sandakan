@@ -252,6 +252,41 @@ pub struct AgentSettings {
     pub max_iterations: usize,
     #[serde(default)]
     pub web_search: Option<WebSearchSettings>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// Discriminated union over the two MCP wire transports.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum McpServerConfig {
+    Stdio(StdioMcpServerConfig),
+    Sse(SseMcpServerConfig),
+}
+
+impl McpServerConfig {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Stdio(c) => &c.name,
+            Self::Sse(c) => &c.name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StdioMcpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SseMcpServerConfig {
+    pub name: String,
+    pub endpoint: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -281,6 +316,7 @@ impl Default for AgentSettings {
             enabled: false,
             max_iterations: default_max_iterations(),
             web_search: None,
+            mcp_servers: Vec::new(),
         }
     }
 }

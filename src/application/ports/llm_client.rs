@@ -31,6 +31,15 @@ pub trait LlmClient: Send + Sync {
         context: &str,
     ) -> Result<LlmTokenStream, LlmClientError>;
 
+    /// Stream the final answer from a conversation history.
+    ///
+    /// Called by `AgentService` after the ReAct loop exits to yield real
+    /// token-by-token SSE output instead of a single buffered chunk.
+    async fn complete_stream_with_messages(
+        &self,
+        messages: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError>;
+
     async fn complete_with_tools(
         &self,
         messages: &[AgentMessage],

@@ -102,6 +102,17 @@ struct ToolCallRequest {
     temperature: f32,
 }
 
+/// Streaming request using the OpenAI messages format (no tool definitions).
+/// Used by `complete_stream_with_messages` for the agent's final answer turn.
+#[derive(Serialize)]
+struct OaiStreamRequest {
+    model: String,
+    messages: Vec<OaiMessage>,
+    max_tokens: usize,
+    temperature: f32,
+    stream: bool,
+}
+
 #[derive(Serialize)]
 struct OaiToolDefinition {
     r#type: &'static str,
@@ -188,7 +199,10 @@ impl StreamingLlmClient {
                     tool_call_id: None,
                     name: None,
                 },
-                AgentMessage::Assistant { content, tool_calls } => OaiMessage {
+                AgentMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => OaiMessage {
                     role: "assistant".to_string(),
                     content: content.clone(),
                     tool_calls: if tool_calls.is_empty() {
@@ -338,6 +352,72 @@ impl LlmClient for StreamingLlmClient {
         Ok(token_stream)
     }
 
+    async fn complete_stream_with_messages(
+        &self,
+        messages: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        let oai_messages = Self::agent_messages_to_oai(messages);
+        let request_body = OaiStreamRequest {
+            model: self.model.clone(),
+            messages: oai_messages,
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            stream: true,
+        };
+
+        let request = self
+            .client
+            .post(format!("{}/chat/completions", self.base_url))
+            .json(&request_body);
+        let response = self
+            .apply_auth(request)
+            .send()
+            .await
+            .map_err(|e| LlmClientError::ApiRequestFailed(e.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(LlmClientError::RateLimited);
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmClientError::ApiRequestFailed(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let stream = response.bytes_stream();
+        let token_stream = Box::pin(stream.flat_map(|chunk_result| {
+            let items: Vec<Result<String, LlmClientError>> = match chunk_result {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    let mut tokens = Vec::new();
+                    for line in text.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data == "[DONE]" {
+                                break;
+                            }
+                            if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) {
+                                if let Some(choice) = chunk.choices.first() {
+                                    if let Some(content) = &choice.delta.content {
+                                        tokens.push(Ok(content.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    tokens
+                }
+                Err(e) => vec![Err(LlmClientError::ApiRequestFailed(e.to_string()))],
+            };
+            futures::stream::iter(items)
+        }));
+
+        Ok(token_stream)
+    }
+
     async fn complete_with_tools(
         &self,
         messages: &[AgentMessage],
@@ -418,9 +498,7 @@ impl LlmClient for StreamingLlmClient {
             return Ok(LlmToolResponse::ToolCalls(calls));
         }
 
-        let content = message
-            .content
-            .unwrap_or_default();
+        let content = message.content.unwrap_or_default();
         Ok(LlmToolResponse::Content(content))
     }
 }

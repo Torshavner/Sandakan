@@ -16,8 +16,8 @@ use sandakan::infrastructure::persistence::{
 };
 use sandakan::infrastructure::storage::MockStagingStore;
 use sandakan::infrastructure::text_processing::MockFileLoader;
-use sandakan::presentation::{AppState, Settings, create_router};
 use sandakan::presentation::config::{AgentSettings, EvalSettings};
+use sandakan::presentation::{AppState, Settings, create_router};
 
 const TEST_CHUNK_SIZE: usize = 512;
 const TEST_CHUNK_OVERLAP: usize = 50;
@@ -32,16 +32,11 @@ struct MockAgentService;
 
 #[async_trait::async_trait]
 impl AgentServicePort for MockAgentService {
-    async fn chat(
-        &self,
-        _request: AgentChatRequest,
-    ) -> Result<AgentChatResponse, AgentError> {
+    async fn chat(&self, _request: AgentChatRequest) -> Result<AgentChatResponse, AgentError> {
         use sandakan::application::ports::LlmClientError;
 
         let (tx, rx) = tokio::sync::mpsc::channel(4);
-        let _ = tx
-            .send(AgentProgressEvent::Thinking { iteration: 0 })
-            .await;
+        let _ = tx.send(AgentProgressEvent::Thinking { iteration: 0 }).await;
         drop(tx);
 
         let token_stream: sandakan::application::ports::LlmTokenStream =
@@ -68,7 +63,10 @@ fn test_settings() -> Settings {
     };
 
     Settings {
-        server: ServerSettings { host: "127.0.0.1".to_string(), port: 3000 },
+        server: ServerSettings {
+            host: "127.0.0.1".to_string(),
+            port: 3000,
+        },
         qdrant: QdrantSettings {
             url: "http://localhost:6334".to_string(),
             collection_name: "test".to_string(),
@@ -158,9 +156,7 @@ fn create_ingestion_sender() -> tokio::sync::mpsc::Sender<IngestionMessage> {
     sender
 }
 
-fn create_test_app_with_agent(
-    agent_service: Option<Arc<dyn AgentServicePort>>,
-) -> axum::Router {
+fn create_test_app_with_agent(agent_service: Option<Arc<dyn AgentServicePort>>) -> axum::Router {
     use sandakan::infrastructure::text_processing::RecursiveCharacterSplitter;
 
     let file_loader = Arc::new(MockFileLoader);

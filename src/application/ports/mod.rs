@@ -17,7 +17,7 @@
 //!   and complete_with_tools(messages, tools) → LlmToolResponse.
 //!   Also exports ToolSchema and LlmToolResponse.
 //! - mcp_client_port            -> McpClientPort port: call_tool(ToolCall) → ToolResult.
-//!   McpError covers ToolNotFound, ExecutionFailed, Serialization.
+//!   McpError covers ToolNotFound, ExecutionFailed, Serialization, Transport, Protocol, ServerExited.
 //! - payload_field_type         -> PayloadFieldType enum for Qdrant index configuration.
 //! - payload_index              -> PayloadIndex struct for Qdrant payload indexing.
 //! - repository_error           -> RepositoryError for conversation/job persistence failures.

@@ -55,7 +55,19 @@ impl LlmClient for HighFaithfulnessJudge {
             Ok("0.95".to_string())
         })))
     }
-
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        unimplemented!()
+    }
     async fn complete_with_tools(
         &self,
         _messages: &[AgentMessage],
@@ -87,7 +99,19 @@ impl LlmClient for InvalidScoreJudge {
     > {
         unimplemented!()
     }
-
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        unimplemented!()
+    }
     async fn complete_with_tools(
         &self,
         _messages: &[AgentMessage],
