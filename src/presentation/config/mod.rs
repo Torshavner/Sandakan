@@ -5,8 +5,8 @@ pub use environment::Environment;
 pub use settings::{
     AgentSettings, AudioExtractionSettings, ChunkingSettings, ChunkingStrategy, DatabaseSettings,
     EmbeddingProvider, EmbeddingsSettings, EvalSettings, ExtractionSettings, ExtractorProvider,
-    LlmSettings, LoggingSettings, McpServerConfig, PdfExtractionSettings, QdrantSettings,
-    RagSettings, ServerSettings, Settings, SseMcpServerConfig, StdioMcpServerConfig,
-    StorageProviderSetting, StorageSettings, TranscriptionProviderSetting, VideoExtractionSettings,
-    WebSearchSettings,
+    LlmSettings, LoggingSettings, McpServerConfig, NotificationFormatSetting, NotificationSettings,
+    PdfExtractionSettings, QdrantSettings, RagSettings, ServerSettings, Settings,
+    SseMcpServerConfig, StdioMcpServerConfig, StorageProviderSetting, StorageSettings,
+    TranscriptionProviderSetting, VideoExtractionSettings, WebSearchSettings,
 };

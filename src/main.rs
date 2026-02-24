@@ -33,10 +33,12 @@ use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
 use sandakan::infrastructure::tools::{
-    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
+    NotificationAdapter, NotificationConfig, NotificationFormat, RagSearchAdapter,
+    StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
 };
 use sandakan::presentation::{
-    AppState, Environment, McpServerConfig, Settings, TranscriptionProviderSetting, create_router,
+    AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
+    TranscriptionProviderSetting, create_router,
 };
 
 const INGESTION_CHANNEL_CAPACITY: usize = 64;
@@ -311,6 +313,24 @@ async fn main() -> anyhow::Result<()> {
             schemas.push(RagSearchAdapter::tool_schema());
             handlers.push(rag as Arc<dyn ToolHandler>);
             tracing::info!("RAG search tool registered");
+        }
+
+        if let Some(notif) = &settings.agent.notification {
+            let format = match notif.format {
+                NotificationFormatSetting::Plain => NotificationFormat::Plain,
+                NotificationFormatSetting::Slack => NotificationFormat::Slack,
+            };
+            let adapter = Arc::new(NotificationAdapter::new(NotificationConfig {
+                webhook_url: notif.webhook_url.clone(),
+                format,
+                timeout_secs: notif.timeout_secs,
+            }));
+            schemas.push(NotificationAdapter::tool_schema());
+            handlers.push(adapter as Arc<dyn ToolHandler>);
+            tracing::info!(
+                webhook_url = %notif.webhook_url,
+                "Notification webhook tool registered"
+            );
         }
 
         // Build a composite MCP client: one entry per configured wire server.

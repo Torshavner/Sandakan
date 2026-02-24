@@ -1,1 +1,2 @@
+mod notification_adapter_test;
 mod rag_search_adapter_test;

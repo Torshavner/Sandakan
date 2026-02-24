@@ -255,6 +255,8 @@ pub struct AgentSettings {
     #[serde(default)]
     pub rag_search_enabled: bool,
     #[serde(default)]
+    pub notification: Option<NotificationSettings>,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -300,6 +302,34 @@ pub struct WebSearchSettings {
     pub max_results: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct NotificationSettings {
+    pub webhook_url: String,
+    #[serde(default = "default_notification_format")]
+    pub format: NotificationFormatSetting,
+    #[serde(default = "default_notification_timeout")]
+    pub timeout_secs: u64,
+}
+
+/// Serialised form of the notification body format.
+///
+/// Kept separate from the domain enum so serde rename_all applies at
+/// the config boundary only and the adapter stays format-agnostic.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationFormatSetting {
+    Plain,
+    Slack,
+}
+
+fn default_notification_format() -> NotificationFormatSetting {
+    NotificationFormatSetting::Plain
+}
+
+fn default_notification_timeout() -> u64 {
+    10
+}
+
 fn default_max_iterations() -> usize {
     10
 }
@@ -319,6 +349,7 @@ impl Default for AgentSettings {
             max_iterations: default_max_iterations(),
             web_search: None,
             rag_search_enabled: false,
+            notification: None,
             mcp_servers: Vec::new(),
         }
     }
