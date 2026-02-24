@@ -20,6 +20,9 @@
 //!   McpError covers ToolNotFound, ExecutionFailed, Serialization, Transport, Protocol, ServerExited.
 //! - payload_field_type         -> PayloadFieldType enum for Qdrant index configuration.
 //! - payload_index              -> PayloadIndex struct for Qdrant payload indexing.
+//! - rag_source_collector       -> RagSourceCollector port: collect(Vec<EvalSource>), drain() → Vec<EvalSource>.
+//!   Side-channel accumulator shared between RagSearchAdapter (writer) and AgentService (reader).
+//!   Only wired when agent.rag_search_enabled = true AND eval.enabled = true.
 //! - repository_error           -> RepositoryError for conversation/job persistence failures.
 //! - retrieval_service_port     -> RetrievalServicePort port: search_chunks(&str) → Vec<SourceChunk>.
 //!   Retrieval-only (embed + search + filter); no LLM synthesis. Used by RagSearchAdapter.
@@ -45,6 +48,7 @@ mod llm_client;
 mod mcp_client_port;
 mod payload_field_type;
 mod payload_index;
+mod rag_source_collector;
 mod repository_error;
 mod retrieval_service_port;
 mod search_result;
@@ -69,6 +73,7 @@ pub use llm_client::{LlmClient, LlmClientError, LlmTokenStream, LlmToolResponse,
 pub use mcp_client_port::{McpClientPort, McpError};
 pub use payload_field_type::PayloadFieldType;
 pub use payload_index::PayloadIndex;
+pub use rag_source_collector::RagSourceCollector;
 pub use repository_error::RepositoryError;
 pub use retrieval_service_port::{RetrievalError, RetrievalServicePort, SourceChunk};
 pub use search_result::SearchResult;

@@ -6,12 +6,10 @@ use futures::future::join_all;
 
 use crate::application::ports::{
     AgentMessage, ConversationRepository, EvalEventRepository, EvalOutboxRepository, LlmClient,
-    LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RepositoryError,
-    ToolRegistry,
+    LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RagSourceCollector,
+    RepositoryError, ToolRegistry,
 };
-use crate::domain::{
-    AgentState, Conversation, ConversationId, EvalEvent, EvalSource, Message, MessageRole,
-};
+use crate::domain::{AgentState, Conversation, ConversationId, EvalEvent, Message, MessageRole};
 
 // ─── Public surface ──────────────────────────────────────────────────────────
 
@@ -84,6 +82,7 @@ pub struct AgentService {
     conversation_repository: Arc<dyn ConversationRepository>,
     eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+    rag_source_collector: Option<Arc<dyn RagSourceCollector>>,
     model_config: String,
     max_iterations: usize,
 }
@@ -97,6 +96,7 @@ impl AgentService {
         conversation_repository: Arc<dyn ConversationRepository>,
         eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
         eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+        rag_source_collector: Option<Arc<dyn RagSourceCollector>>,
         model_config: String,
         max_iterations: usize,
     ) -> Self {
@@ -107,6 +107,7 @@ impl AgentService {
             conversation_repository,
             eval_event_repository,
             eval_outbox_repository,
+            rag_source_collector,
             model_config,
             max_iterations,
         }
@@ -216,12 +217,13 @@ impl AgentService {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
-            let eval_event = EvalEvent::new(
-                question,
-                answer,
-                Vec::<EvalSource>::new(),
-                &self.model_config,
-            );
+            let sources = self
+                .rag_source_collector
+                .as_ref()
+                .map(|c| c.drain())
+                .unwrap_or_default();
+
+            let eval_event = EvalEvent::new(question, answer, sources, &self.model_config);
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             tokio::spawn(async move {

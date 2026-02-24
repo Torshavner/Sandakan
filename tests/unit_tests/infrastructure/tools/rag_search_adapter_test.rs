@@ -56,7 +56,7 @@ async fn given_chunks_returned_by_port_when_executing_rag_search_then_formats_nu
             score: 0.88,
         },
     ];
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
 
     let result = adapter.execute(&json!({"query": "what is Rust?"})).await;
 
@@ -69,7 +69,7 @@ async fn given_chunks_returned_by_port_when_executing_rag_search_then_formats_nu
 
 #[tokio::test]
 async fn given_empty_knowledge_base_when_executing_rag_search_then_returns_not_found_message() {
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty), None);
 
     let result = adapter.execute(&json!({"query": "anything"})).await;
 
@@ -82,7 +82,7 @@ async fn given_empty_knowledge_base_when_executing_rag_search_then_returns_not_f
 
 #[tokio::test]
 async fn given_missing_query_argument_when_executing_rag_search_then_returns_serialization_error() {
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty), None);
 
     let result = adapter.execute(&json!({})).await;
 
@@ -94,7 +94,7 @@ async fn given_missing_query_argument_when_executing_rag_search_then_returns_ser
 
 #[tokio::test]
 async fn given_port_failure_when_executing_rag_search_then_returns_execution_failed_error() {
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortFailing));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortFailing), None);
 
     let result = adapter.execute(&json!({"query": "trigger failure"})).await;
 
@@ -109,7 +109,7 @@ async fn given_chunk_text_exceeds_800_chars_when_formatting_response_then_text_i
         page: None,
         score: 0.80,
     }];
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
 
     let result = adapter.execute(&json!({"query": "long document"})).await;
 
@@ -121,7 +121,7 @@ async fn given_chunk_text_exceeds_800_chars_when_formatting_response_then_text_i
 
 #[tokio::test]
 async fn given_rag_search_adapter_when_querying_tool_name_then_returns_rag_search() {
-    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty));
+    let adapter = RagSearchAdapter::new(Arc::new(StubPortEmpty), None);
     assert_eq!(adapter.tool_name(), "rag_search");
 }
 

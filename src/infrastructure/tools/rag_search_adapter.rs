@@ -2,16 +2,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::application::ports::{McpError, RetrievalServicePort, SourceChunk, ToolSchema};
+use crate::application::ports::{
+    McpError, RagSourceCollector, RetrievalServicePort, SourceChunk, ToolSchema,
+};
+use crate::domain::EvalSource;
 use crate::infrastructure::mcp::ToolHandler;
 
 pub struct RagSearchAdapter {
     port: Arc<dyn RetrievalServicePort>,
+    source_collector: Option<Arc<dyn RagSourceCollector>>,
 }
 
 impl RagSearchAdapter {
-    pub fn new(port: Arc<dyn RetrievalServicePort>) -> Self {
-        Self { port }
+    pub fn new(
+        port: Arc<dyn RetrievalServicePort>,
+        source_collector: Option<Arc<dyn RagSourceCollector>>,
+    ) -> Self {
+        Self {
+            port,
+            source_collector,
+        }
     }
 
     /// JSON Schema for this tool, registered with the `ToolRegistry`.
@@ -51,6 +61,18 @@ impl ToolHandler for RagSearchAdapter {
             .search_chunks(query)
             .await
             .map_err(|e| McpError::ExecutionFailed(e.to_string()))?;
+
+        if let Some(collector) = &self.source_collector {
+            let eval_sources: Vec<EvalSource> = chunks
+                .iter()
+                .map(|c| EvalSource {
+                    text: c.text.clone(),
+                    page: c.page,
+                    score: c.score,
+                })
+                .collect();
+            collector.collect(eval_sources);
+        }
 
         Ok(format_rag_response(&chunks))
     }

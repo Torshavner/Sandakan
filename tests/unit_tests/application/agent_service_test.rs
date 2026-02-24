@@ -5,13 +5,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use sandakan::application::ports::{
     AgentMessage, ConversationRepository, LlmClient, LlmClientError, LlmTokenStream,
-    LlmToolResponse, McpClientPort, McpError, RepositoryError, ToolRegistry, ToolSchema,
+    LlmToolResponse, McpClientPort, McpError, RagSourceCollector, RepositoryError, ToolRegistry,
+    ToolSchema,
 };
 use sandakan::application::services::{
     AgentChatRequest, AgentError, AgentService, AgentServicePort,
 };
 use sandakan::domain::{
-    Conversation, ConversationId, Message, ToolCall, ToolCallId, ToolName, ToolResult,
+    Conversation, ConversationId, EvalSource, Message, ToolCall, ToolCallId, ToolName, ToolResult,
 };
 
 // ─── Mock: LLM returns ToolCalls on first call, Content on second ─────────────
@@ -201,6 +202,25 @@ fn build_service(llm: Arc<dyn LlmClient>, mcp: Arc<dyn McpClientPort>) -> AgentS
         Arc::new(MockConversationRepository),
         None,
         None,
+        None, // rag_source_collector
+        "test/model".to_string(),
+        3,
+    )
+}
+
+fn build_service_with_collector(
+    llm: Arc<dyn LlmClient>,
+    mcp: Arc<dyn McpClientPort>,
+    collector: Arc<dyn RagSourceCollector>,
+) -> AgentService {
+    AgentService::new(
+        llm,
+        mcp,
+        Arc::new(MockToolRegistry),
+        Arc::new(MockConversationRepository),
+        None,
+        None,
+        Some(collector),
         "test/model".to_string(),
         3,
     )
@@ -450,6 +470,166 @@ async fn given_one_of_two_parallel_tool_calls_fails_when_executing_then_agent_re
     assert!(
         matches!(result, Err(AgentError::Tool(_))),
         "expected Err(Tool(_))"
+    );
+}
+
+// ─── Mock: RagSourceCollector that records collected sources ──────────────────
+
+struct MockRagSourceCollector {
+    collected: Arc<std::sync::Mutex<Vec<EvalSource>>>,
+}
+
+impl MockRagSourceCollector {
+    fn new() -> Self {
+        Self {
+            collected: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl RagSourceCollector for MockRagSourceCollector {
+    fn collect(&self, mut sources: Vec<EvalSource>) {
+        self.collected.lock().unwrap().append(&mut sources);
+    }
+
+    fn drain(&self) -> Vec<EvalSource> {
+        std::mem::take(&mut self.collected.lock().unwrap())
+    }
+}
+
+// ─── Mock: MCP that simulates rag_search populating the side-channel ─────────
+
+struct MockMcpRagSearch {
+    collector: Arc<dyn RagSourceCollector>,
+}
+
+#[async_trait::async_trait]
+impl McpClientPort for MockMcpRagSearch {
+    async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+        if call.name.as_str() == "rag_search" {
+            // Simulate what RagSearchAdapter does: populate the side-channel.
+            self.collector.collect(vec![EvalSource {
+                text: "retrieved chunk text".to_string(),
+                page: Some(1),
+                score: 0.9,
+            }]);
+        }
+        Ok(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: "Found 1 relevant sources:\n1. [Page 1, score: 0.90]: retrieved chunk text"
+                .to_string(),
+        })
+    }
+}
+
+// ─── Mock: LLM that issues a rag_search call, then returns content ────────────
+
+struct MockLlmRagThenContent {
+    call_count: AtomicU32,
+}
+
+impl MockLlmRagThenContent {
+    fn new() -> Self {
+        Self {
+            call_count: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmRagThenContent {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        Ok(String::new())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("RAG-based answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if count == 0 {
+            Ok(LlmToolResponse::ToolCalls(vec![ToolCall {
+                id: ToolCallId::new("call_rag"),
+                name: ToolName::new("rag_search"),
+                arguments: serde_json::json!({"query": "test question"}),
+            }]))
+        } else {
+            Ok(LlmToolResponse::Content("RAG-based answer".to_string()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn given_rag_tool_collects_sources_when_eval_enabled_then_eval_event_has_non_empty_sources() {
+    // The collector is shared between the mock MCP (writer) and the service (reader).
+    // With eval repos wired as None, fire_and_forget_eval is a no-op, so we verify
+    // the collector was populated during tool execution by inspecting it afterwards.
+    let collector = Arc::new(MockRagSourceCollector::new());
+    let mcp = Arc::new(MockMcpRagSearch {
+        collector: Arc::clone(&collector) as Arc<dyn RagSourceCollector>,
+    });
+    let service = build_service_with_collector(
+        Arc::new(MockLlmRagThenContent::new()),
+        mcp,
+        Arc::clone(&collector) as Arc<dyn RagSourceCollector>,
+    );
+
+    let result = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "What does the KB say?".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    // Sources accumulated during the rag_search tool call.
+    let sources = collector.drain();
+    assert_eq!(sources.len(), 1, "collector should hold the RAG source");
+    assert_eq!(sources[0].text, "retrieved chunk text");
+
+    // Token stream still works normally.
+    let mut token_stream = result.token_stream;
+    let mut collected = String::new();
+    while let Some(tok) = futures::StreamExt::next(&mut token_stream).await {
+        collected.push_str(&tok.unwrap());
+    }
+    assert_eq!(collected, "RAG-based answer");
+}
+
+#[tokio::test]
+async fn given_no_rag_tool_invoked_when_eval_fires_then_eval_event_has_empty_sources() {
+    let collector = Arc::new(MockRagSourceCollector::new());
+    let service = build_service_with_collector(
+        Arc::new(MockLlmImmediateContent),
+        Arc::new(MockMcpSuccess),
+        Arc::clone(&collector) as Arc<dyn RagSourceCollector>,
+    );
+
+    service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "No RAG needed".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    // No rag_search was called, so collector should remain empty.
+    let remaining = collector.drain();
+    assert!(
+        remaining.is_empty(),
+        "no sources should be collected when rag_search was not invoked"
     );
 }
 

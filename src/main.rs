@@ -7,6 +7,7 @@ use config::{Config, File};
 use tokio::net::TcpListener;
 
 use sandakan::application::ports::McpClientPort;
+use sandakan::application::ports::RagSourceCollector;
 use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
@@ -33,8 +34,8 @@ use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
 use sandakan::infrastructure::tools::{
-    NotificationAdapter, NotificationConfig, NotificationFormat, RagSearchAdapter,
-    StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
+    InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
+    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
 };
 use sandakan::presentation::{
     AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
@@ -306,9 +307,20 @@ async fn main() -> anyhow::Result<()> {
             handlers.push(adapter as Arc<dyn ToolHandler>);
         }
 
+        // Create the side-channel source collector only when both rag_search and
+        // eval are enabled. The Arc is cloned: writer end → RagSearchAdapter,
+        // reader end → AgentService.
+        let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
+            if settings.agent.rag_search_enabled && settings.eval.enabled {
+                Some(Arc::new(InMemoryRagSourceCollector::new()))
+            } else {
+                None
+            };
+
         if settings.agent.rag_search_enabled {
             let rag = Arc::new(RagSearchAdapter::new(
-                Arc::clone(&retrieval_service) as Arc<dyn RetrievalServicePort>
+                Arc::clone(&retrieval_service) as Arc<dyn RetrievalServicePort>,
+                rag_source_collector.clone(),
             ));
             schemas.push(RagSearchAdapter::tool_schema());
             handlers.push(rag as Arc<dyn ToolHandler>);
@@ -396,6 +408,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&conversation_repository),
             agent_eval_event_repo,
             agent_eval_outbox_repo,
+            rag_source_collector,
             agent_model_config,
             settings.agent.max_iterations,
         ));
