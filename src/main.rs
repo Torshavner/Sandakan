@@ -214,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
     let (ingestion_sender, ingestion_receiver) =
         tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
 
-    let worker = IngestionWorker::new(
+    let ingestion_worker = IngestionWorker::new(
         ingestion_receiver,
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
@@ -224,11 +224,6 @@ async fn main() -> anyhow::Result<()> {
         transcription_engine,
         Arc::clone(&staging_store),
     );
-
-    tokio::spawn(async move {
-        worker.run().await;
-    });
-    tracing::info!("Ingestion worker spawned");
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
@@ -257,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&conversation_repository),
         eval_event_repo.clone(),
         eval_outbox_repo.clone(),
-        model_config,
+        model_config.clone(),
         settings.rag.top_k,
         settings.rag.similarity_threshold,
         settings.rag.max_context_tokens,
@@ -267,32 +262,41 @@ async fn main() -> anyhow::Result<()> {
     let agent_eval_event_repo = eval_event_repo.clone();
     let agent_eval_outbox_repo = eval_outbox_repo.clone();
 
-    if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
-        let result_repo: Arc<dyn EvalResultRepository> =
-            Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
+    let ingestion_worker =
+        if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
+            let result_repo: Arc<dyn EvalResultRepository> =
+                Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
 
-        let eval_worker = EvalWorker::new(
-            outbox_repo,
-            event_repo,
-            result_repo,
-            Arc::clone(&embedder),
-            llm_client.clone() as Arc<dyn LlmClient>,
-            settings.eval.faithfulness_threshold,
-            settings.eval.correctness_threshold,
-            std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
-            settings.eval.worker_batch_size,
-        );
-        tokio::spawn(async move {
-            eval_worker.run().await;
-        });
-        tracing::info!(
-            poll_interval_secs = settings.eval.worker_poll_interval_secs,
-            batch_size = settings.eval.worker_batch_size,
-            "EvalWorker spawned"
-        );
-    } else {
-        tracing::info!("Eval feature disabled");
-    }
+            let eval_worker = EvalWorker::new(
+                outbox_repo.clone(),
+                event_repo.clone(),
+                result_repo,
+                Arc::clone(&embedder),
+                llm_client.clone() as Arc<dyn LlmClient>,
+                settings.eval.faithfulness_threshold,
+                settings.eval.correctness_threshold,
+                std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
+                settings.eval.worker_batch_size,
+            );
+            tokio::spawn(async move {
+                eval_worker.run().await;
+            });
+            tracing::info!(
+                poll_interval_secs = settings.eval.worker_poll_interval_secs,
+                batch_size = settings.eval.worker_batch_size,
+                "EvalWorker spawned"
+            );
+
+            ingestion_worker.with_eval(event_repo, outbox_repo, &model_config)
+        } else {
+            tracing::info!("Eval feature disabled");
+            ingestion_worker
+        };
+
+    tokio::spawn(async move {
+        ingestion_worker.run().await;
+    });
+    tracing::info!("Ingestion worker spawned");
 
     let agent_service: Option<Arc<dyn AgentServicePort>> = if settings.agent.enabled {
         let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();

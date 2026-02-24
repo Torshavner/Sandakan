@@ -9,6 +9,8 @@
 //!   Fields: question (required), expected_answer (required), expected_source_pages: Option<Vec<u32>> (default None).
 //! - eval_event     -> EvalEvent captured passively during RAG queries. EvalSource (text, page, score).
 //!   EvalEventId with from_uuid / as_uuid. context_text() joins sources with "\n\n".
+//!   EvalOperationType enum (Query | AgenticRun | IngestionPdf | IngestionMp4) with as_str().
+//!   Constructors: new() → Query, new_agentic() → AgenticRun, new_ingestion() → Pdf/Mp4.
 //! - eval_outbox    -> EvalOutboxEntry (durable outbox row for background scoring) and
 //!   EvalOutboxStatus (Pending | Processing | Done | Failed). Serde-ready for US-017 broker bounds.
 //! - eval_result    -> EvalResult persisted scoring outcome; EvalResultId (UUID newtype with from_uuid/as_uuid).
@@ -50,7 +52,7 @@ pub use conversation_id::ConversationId;
 pub use document::{ContentType, Document};
 pub use embedding::Embedding;
 pub use eval_entry::EvalEntry;
-pub use eval_event::{EvalEvent, EvalEventId, EvalSource};
+pub use eval_event::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
 pub use eval_outbox::{EvalOutboxEntry, EvalOutboxStatus};
 pub use eval_result::{EvalResult, EvalResultId};
 pub use job::Job;

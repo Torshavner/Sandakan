@@ -260,7 +260,8 @@ impl AgentService {
                 .map(|c| c.drain())
                 .unwrap_or_default();
 
-            let eval_event = EvalEvent::new(question, answer, sources, &self.config.model_config);
+            let eval_event =
+                EvalEvent::new_agentic(question, answer, sources, &self.config.model_config);
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             tokio::spawn(async move {
