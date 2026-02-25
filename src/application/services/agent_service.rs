@@ -10,7 +10,9 @@ use crate::application::ports::{
     LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RagSourceCollector,
     RepositoryError, ToolRegistry,
 };
-use crate::domain::{AgentState, Conversation, ConversationId, EvalEvent, Message, MessageRole};
+use crate::domain::{
+    AgentState, Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName,
+};
 
 // ─── Public surface ──────────────────────────────────────────────────────────
 
@@ -268,14 +270,48 @@ impl AgentService {
         conversation_id: ConversationId,
         user_message: &str,
         answer: &str,
+        react_messages: &[AgentMessage],
     ) {
         let user_msg = Message::new(conversation_id, MessageRole::User, user_message.to_string());
-        let assistant_msg =
-            Message::new(conversation_id, MessageRole::Assistant, answer.to_string());
-
         if let Err(e) = self.conversation_repository.append_message(&user_msg).await {
             tracing::warn!(error = %e, "Failed to persist agent user message");
         }
+
+        for agent_msg in react_messages {
+            match agent_msg {
+                AgentMessage::Assistant {
+                    content: None,
+                    tool_calls,
+                } if !tool_calls.is_empty() => {
+                    let content =
+                        serde_json::to_string(tool_calls).unwrap_or_else(|_| "[]".to_string());
+                    let first_name = tool_calls[0].name.as_str();
+                    let msg = Message::new_tool_call(
+                        conversation_id,
+                        ToolName::new(first_name),
+                        content,
+                    );
+                    if let Err(e) = self.conversation_repository.append_message(&msg).await {
+                        tracing::warn!(error = %e, "Failed to persist agent tool-call message");
+                    }
+                }
+                AgentMessage::ToolResult(result) => {
+                    let msg = Message::new_tool_response(
+                        conversation_id,
+                        result.tool_call_id.clone(),
+                        result.tool_name.clone(),
+                        result.content.clone(),
+                    );
+                    if let Err(e) = self.conversation_repository.append_message(&msg).await {
+                        tracing::warn!(error = %e, "Failed to persist agent tool-response message");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let assistant_msg =
+            Message::new(conversation_id, MessageRole::Assistant, answer.to_string());
         if let Err(e) = self
             .conversation_repository
             .append_message(&assistant_msg)
@@ -414,7 +450,7 @@ impl AgentServicePort for AgentService {
         // Drop sender so the handler's drain loop sees the channel as closed.
         drop(progress_tx);
 
-        self.persist_turn(conversation_id, &request.user_message, &answer)
+        self.persist_turn(conversation_id, &request.user_message, &answer, &final_messages)
             .await;
 
         self.fire_and_forget_eval(&request.user_message, &answer);

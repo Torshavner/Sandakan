@@ -4,7 +4,9 @@ use sqlx::PgPool;
 use tracing::instrument;
 
 use crate::application::ports::{ConversationRepository, RepositoryError};
-use crate::domain::{Conversation, ConversationId, Message, MessageId, MessageRole, ToolCallId};
+use crate::domain::{
+    Conversation, ConversationId, Message, MessageId, MessageRole, ToolCallId, ToolName,
+};
 
 pub struct PgConversationRepository {
     pool: PgPool,
@@ -86,17 +88,22 @@ impl ConversationRepository for PgConversationRepository {
             .tool_call_id
             .as_ref()
             .map(|id| id.as_str().to_string());
+        let tool_name = message
+            .tool_name
+            .as_ref()
+            .map(|n| n.as_str().to_string());
 
         sqlx::query!(
             r#"
-            INSERT INTO messages (id, conversation_id, role, content, tool_call_id, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO messages (id, conversation_id, role, content, tool_call_id, tool_name, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
             message_id,
             conversation_id,
             role,
             message.content,
             tool_call_id,
+            tool_name,
             message.created_at
         )
         .execute(&self.pool)
@@ -131,7 +138,7 @@ impl ConversationRepository for PgConversationRepository {
 
         let rows = sqlx::query!(
             r#"
-            SELECT id, conversation_id, role, content, tool_call_id, created_at
+            SELECT id, conversation_id, role, content, tool_call_id, tool_name, created_at
             FROM messages
             WHERE conversation_id = $1
             ORDER BY created_at DESC
@@ -158,6 +165,7 @@ impl ConversationRepository for PgConversationRepository {
                     role,
                     content: r.content,
                     tool_call_id: r.tool_call_id.map(ToolCallId::new),
+                    tool_name: r.tool_name.map(ToolName::new),
                     created_at: r.created_at,
                 })
             })

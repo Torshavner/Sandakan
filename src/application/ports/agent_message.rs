@@ -25,19 +25,26 @@ impl From<Message> for AgentMessage {
                 content: Some(msg.content),
                 tool_calls: Vec::new(),
             },
-            MessageRole::Tool => AgentMessage::Assistant {
-                content: None,
-                tool_calls: Vec::new(),
-            },
+            MessageRole::Tool => {
+                // Reconstruct tool calls from persisted JSON; fall back to empty vec on
+                // parse failure so history replay degrades gracefully rather than panicking.
+                let tool_calls = serde_json::from_str::<Vec<ToolCall>>(&msg.content)
+                    .unwrap_or_default();
+                AgentMessage::Assistant {
+                    content: None,
+                    tool_calls,
+                }
+            }
             MessageRole::ToolResponse => {
-                // Reconstruct a minimal ToolResult from the persisted message.
-                // tool_call_id and tool_name are best-effort from available fields.
                 let tool_call_id = msg
                     .tool_call_id
                     .unwrap_or_else(|| crate::domain::ToolCallId::new("unknown"));
+                let tool_name = msg
+                    .tool_name
+                    .unwrap_or_else(|| crate::domain::ToolName::new("unknown"));
                 AgentMessage::ToolResult(ToolResult {
                     tool_call_id,
-                    tool_name: crate::domain::ToolName::new("unknown"),
+                    tool_name,
                     content: msg.content,
                 })
             }

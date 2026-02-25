@@ -1,7 +1,9 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Uses a String interior because OpenAI returns arbitrary IDs like "call_abc123".
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ToolCallId(String);
 
 impl ToolCallId {
@@ -20,7 +22,7 @@ impl fmt::Display for ToolCallId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ToolName(String);
 
 impl ToolName {
@@ -39,7 +41,7 @@ impl fmt::Display for ToolName {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: ToolCallId,
     pub name: ToolName,
