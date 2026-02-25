@@ -78,6 +78,21 @@ impl ToolHandler for RagSearchAdapter {
     }
 }
 
+/// Returns the longest prefix of `s` whose byte length does not exceed `max_bytes`,
+/// always slicing at a UTF-8 codepoint boundary to avoid a panic on multi-byte sequences.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let boundary = s
+        .char_indices()
+        .take_while(|(pos, ch)| pos + ch.len_utf8() <= max_bytes)
+        .last()
+        .map(|(pos, ch)| pos + ch.len_utf8())
+        .unwrap_or(0);
+    &s[..boundary]
+}
+
 fn format_rag_response(chunks: &[SourceChunk]) -> String {
     if chunks.is_empty() {
         return "No relevant documents found in the knowledge base.".to_string();
@@ -92,11 +107,7 @@ fn format_rag_response(chunks: &[SourceChunk]) -> String {
                 .map(|p| format!("Page {p}"))
                 .unwrap_or_else(|| "Page ?".to_string());
 
-            let text = if chunk.text.len() > 800 {
-                &chunk.text[..800]
-            } else {
-                &chunk.text
-            };
+            let text = truncate_utf8(&chunk.text, 800);
 
             format!(
                 "{}. [{}, score: {:.2}]: {}",
