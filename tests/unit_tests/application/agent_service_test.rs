@@ -1412,3 +1412,210 @@ async fn given_critic_returns_unparseable_response_when_reflecting_then_answer_r
         "no CorrectionApplied for unparseable critic"
     );
 }
+
+// ─── truncate_for_event (via AgentProgressEvent::ToolResult) ──────────────────
+//
+// The helper is private, so we exercise it indirectly: a tool result whose
+// content contains multi-byte UTF-8 sequences must never panic and must be
+// correctly truncated at a codepoint boundary.
+
+/// MCP that returns a fixed content string, allowing the test to inject arbitrary bytes.
+struct MockMcpWithContent(String);
+
+#[async_trait::async_trait]
+impl McpClientPort for MockMcpWithContent {
+    async fn call_tool(&self, call: &ToolCall) -> Result<ToolResult, McpError> {
+        Ok(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: self.0.clone(),
+        })
+    }
+}
+
+/// LLM that issues one tool call, then returns Content — used by truncation tests.
+struct MockLlmOneThenContent;
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmOneThenContent {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        Ok(String::new())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("ok".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        messages: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        // First call: emit a tool call. Subsequent calls: return content.
+        let already_has_tool_result = messages.iter().any(|m| matches!(m, AgentMessage::ToolResult(_)));
+        if already_has_tool_result {
+            Ok(LlmToolResponse::Content("ok".to_string()))
+        } else {
+            Ok(LlmToolResponse::ToolCalls(vec![ToolCall {
+                id: ToolCallId::new("call_utf8"),
+                name: ToolName::new("any_tool"),
+                arguments: serde_json::json!({}),
+            }]))
+        }
+    }
+}
+
+#[tokio::test]
+async fn given_tool_result_with_ascii_content_when_truncating_then_progress_event_emitted_without_panic() {
+    let content = "a".repeat(200);
+    let service = build_service(
+        Arc::new(MockLlmOneThenContent),
+        Arc::new(MockMcpWithContent(content)),
+    );
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "trigger ascii tool".to_string(),
+        })
+        .await
+        .expect("should not panic on ascii content");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let tool_result_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
+        .collect();
+
+    assert!(!tool_result_events.is_empty(), "ToolResult event must be emitted");
+}
+
+#[tokio::test]
+async fn given_tool_result_with_multibyte_utf8_when_truncating_then_no_panic_and_event_emitted() {
+    // Each '日' is 3 bytes. 50 repetitions = 150 bytes — exceeds the 120-byte
+    // truncation limit. The cut at byte 120 would land inside a 3-byte codepoint
+    // without the floor_char_boundary fix, causing a panic.
+    let content = "日".repeat(50);
+    let service = build_service(
+        Arc::new(MockLlmOneThenContent),
+        Arc::new(MockMcpWithContent(content)),
+    );
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "trigger multibyte tool".to_string(),
+        })
+        .await
+        .expect("must not panic on multibyte UTF-8 content");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let tool_result_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
+        .collect();
+
+    assert!(!tool_result_events.is_empty(), "ToolResult progress event must be emitted");
+
+    if let AgentProgressEvent::ToolResult { truncated_content, .. } = &tool_result_events[0] {
+        // Content was longer than 120 bytes so it must have been truncated.
+        assert!(
+            truncated_content.ends_with('…'),
+            "truncated content must end with ellipsis, got: {truncated_content:?}"
+        );
+        // The truncated prefix must be valid UTF-8 (no partial codepoints).
+        assert!(
+            std::str::from_utf8(truncated_content.as_bytes()).is_ok(),
+            "truncated content must be valid UTF-8"
+        );
+    }
+}
+
+#[tokio::test]
+async fn given_tool_result_with_emoji_content_when_truncating_then_no_panic_and_event_emitted() {
+    // Each emoji ('🦀') is 4 bytes. 40 repetitions = 160 bytes — exceeds 120.
+    // Without floor_char_boundary the cut at byte 120 hits inside a 4-byte sequence.
+    let content = "🦀".repeat(40);
+    let service = build_service(
+        Arc::new(MockLlmOneThenContent),
+        Arc::new(MockMcpWithContent(content)),
+    );
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "trigger emoji tool".to_string(),
+        })
+        .await
+        .expect("must not panic on emoji content");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let tool_result_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
+        .collect();
+
+    assert!(!tool_result_events.is_empty(), "ToolResult progress event must be emitted");
+
+    if let AgentProgressEvent::ToolResult { truncated_content, .. } = &tool_result_events[0] {
+        assert!(
+            truncated_content.ends_with('…'),
+            "truncated content must end with ellipsis, got: {truncated_content:?}"
+        );
+        assert!(
+            std::str::from_utf8(truncated_content.as_bytes()).is_ok(),
+            "truncated content must be valid UTF-8"
+        );
+    }
+}
+
+#[tokio::test]
+async fn given_tool_result_shorter_than_limit_when_truncating_then_content_returned_unchanged() {
+    // Content well below the 120-byte limit — must not be truncated.
+    let content = "short result".to_string();
+    let service = build_service(
+        Arc::new(MockLlmOneThenContent),
+        Arc::new(MockMcpWithContent(content.clone())),
+    );
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "trigger short tool".to_string(),
+        })
+        .await
+        .expect("should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    if let Some(AgentProgressEvent::ToolResult { truncated_content, .. }) = events
+        .iter()
+        .find(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
+    {
+        assert_eq!(
+            truncated_content, &content,
+            "short content must not be modified"
+        );
+    }
+}

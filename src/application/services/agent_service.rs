@@ -438,12 +438,23 @@ You are a critical evaluator. Review the candidate answer below and score it fro
 \nSCORE: 0.X\
 \nISSUES: <comma-separated list, or \"none\">";
 
-fn truncate_for_event(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max_chars])
+/// Truncates `s` to at most `max_bytes` bytes without splitting a UTF-8 codepoint.
+///
+/// `s.len()` is a byte count, so a naive `&s[..max_bytes]` panics when the cut
+/// lands inside a multi-byte sequence (CJK, emoji, accented text). Walking
+/// `char_indices` finds the last safe codepoint boundary at or before the limit.
+fn truncate_for_event(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
     }
+    // Find the byte offset of the last char that fits entirely within max_bytes.
+    let boundary = s
+        .char_indices()
+        .take_while(|(byte_pos, ch)| byte_pos + ch.len_utf8() <= max_bytes)
+        .last()
+        .map(|(byte_pos, ch)| byte_pos + ch.len_utf8())
+        .unwrap_or(0);
+    format!("{}…", &s[..boundary])
 }
 
 /// Parses `SCORE: 0.X` and `ISSUES: ...` lines from a critic response.
