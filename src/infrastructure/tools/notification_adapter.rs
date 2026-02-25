@@ -21,13 +21,11 @@ pub struct NotificationAdapter {
 }
 
 impl NotificationAdapter {
-    pub fn new(config: NotificationConfig) -> Self {
+    pub fn new(config: NotificationConfig) -> Result<Self, reqwest::Error> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
-            .build()
-            // SAFETY: only fails on invalid TLS config; default TLS is always valid.
-            .expect("reqwest client with default TLS config is always constructible");
-        Self { client, config }
+            .build()?;
+        Ok(Self { client, config })
     }
 
     /// JSON Schema for this tool, registered with the `ToolRegistry`.

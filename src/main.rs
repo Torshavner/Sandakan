@@ -338,7 +338,7 @@ async fn main() -> anyhow::Result<()> {
                 webhook_url: notif.webhook_url.clone(),
                 format,
                 timeout_secs: notif.timeout_secs,
-            }));
+            })?);
             schemas.push(NotificationAdapter::tool_schema());
             handlers.push(adapter as Arc<dyn ToolHandler>);
             tracing::info!(

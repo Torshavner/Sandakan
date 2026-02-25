@@ -41,7 +41,8 @@ async fn given_missing_message_argument_when_executing_then_returns_serializatio
         webhook_url: "http://localhost:9999/nonexistent".to_string(),
         format: NotificationFormat::Plain,
         timeout_secs: 1,
-    });
+    })
+    .expect("reqwest client construction must succeed in tests");
 
     let result = adapter.execute(&json!({})).await;
 
@@ -60,7 +61,8 @@ fn given_notification_adapter_when_querying_tool_name_then_returns_send_notifica
         webhook_url: "http://localhost:9999/hook".to_string(),
         format: NotificationFormat::Plain,
         timeout_secs: 5,
-    });
+    })
+    .expect("reqwest client construction must succeed in tests");
     assert_eq!(adapter.tool_name(), "send_notification");
 }
 
