@@ -88,10 +88,7 @@ impl ConversationRepository for PgConversationRepository {
             .tool_call_id
             .as_ref()
             .map(|id| id.as_str().to_string());
-        let tool_name = message
-            .tool_name
-            .as_ref()
-            .map(|n| n.as_str().to_string());
+        let tool_name = message.tool_name.as_ref().map(|n| n.as_str().to_string());
 
         sqlx::query!(
             r#"

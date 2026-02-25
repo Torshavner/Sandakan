@@ -278,11 +278,8 @@ impl AgentService {
                     let content =
                         serde_json::to_string(tool_calls).unwrap_or_else(|_| "[]".to_string());
                     let first_name = tool_calls[0].name.as_str();
-                    let msg = Message::new_tool_call(
-                        conversation_id,
-                        ToolName::new(first_name),
-                        content,
-                    );
+                    let msg =
+                        Message::new_tool_call(conversation_id, ToolName::new(first_name), content);
                     if let Err(e) = self.conversation_repository.append_message(&msg).await {
                         tracing::warn!(error = %e, "Failed to persist agent tool-call message");
                     }
@@ -442,8 +439,13 @@ impl AgentServicePort for AgentService {
         // Drop sender so the handler's drain loop sees the channel as closed.
         drop(progress_tx);
 
-        self.persist_turn(conversation_id, &request.user_message, &answer, &final_messages)
-            .await;
+        self.persist_turn(
+            conversation_id,
+            &request.user_message,
+            &answer,
+            &final_messages,
+        )
+        .await;
 
         self.fire_and_forget_eval(&request.user_message, &answer);
 

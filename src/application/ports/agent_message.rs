@@ -28,8 +28,8 @@ impl From<Message> for AgentMessage {
             MessageRole::Tool => {
                 // Reconstruct tool calls from persisted JSON; fall back to empty vec on
                 // parse failure so history replay degrades gracefully rather than panicking.
-                let tool_calls = serde_json::from_str::<Vec<ToolCall>>(&msg.content)
-                    .unwrap_or_default();
+                let tool_calls =
+                    serde_json::from_str::<Vec<ToolCall>>(&msg.content).unwrap_or_default();
                 AgentMessage::Assistant {
                     content: None,
                     tool_calls,

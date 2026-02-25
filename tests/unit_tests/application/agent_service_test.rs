@@ -1476,7 +1476,10 @@ async fn given_correction_budget_5_when_second_correction_passes_threshold_then_
         ..
     } = last_reflection
     {
-        assert!(*score >= 0.7, "final Reflection event must show passing score");
+        assert!(
+            *score >= 0.7,
+            "final Reflection event must show passing score"
+        );
         assert!(
             !needs_correction,
             "final Reflection event must not request further correction"
