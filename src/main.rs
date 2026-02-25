@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
         settings.chunking.strategy,
         settings.chunking.max_chunk_size,
         settings.chunking.overlap_tokens,
-    );
+    )?;
 
     let transcription_provider = match settings.extraction.audio.provider {
         TranscriptionProviderSetting::Local => TranscriptionProvider::Local,

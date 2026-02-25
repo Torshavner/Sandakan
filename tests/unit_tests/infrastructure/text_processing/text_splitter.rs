@@ -42,7 +42,7 @@ async fn given_empty_text_when_recursive_character_splitter_splits_then_returns_
 #[tokio::test]
 async fn given_multi_sentence_text_when_semantic_splitter_splits_then_chunks_terminate_at_sentence_boundaries()
  {
-    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS);
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
     let text = "First sentence. Second sentence! Third sentence? Fourth sentence.";
     let doc_id = DocumentId::new();
 
@@ -65,7 +65,7 @@ async fn given_multi_sentence_text_when_semantic_splitter_splits_then_chunks_ter
 #[tokio::test]
 async fn given_long_text_when_semantic_splitter_splits_with_tight_limit_then_respects_token_limits()
 {
-    let splitter = SemanticSplitter::new(TIGHT_TOKEN_LIMIT, TIGHT_OVERLAP_TOKENS);
+    let splitter = SemanticSplitter::new(TIGHT_TOKEN_LIMIT, TIGHT_OVERLAP_TOKENS).unwrap();
     let text = "This is the first sentence. This is the second sentence. This is the third sentence. This is the fourth sentence. This is the fifth sentence.";
     let doc_id = DocumentId::new();
 
@@ -78,7 +78,7 @@ async fn given_long_text_when_semantic_splitter_splits_with_tight_limit_then_res
 
 #[tokio::test]
 async fn given_multi_paragraph_text_when_semantic_splitter_splits_then_handles_paragraph_breaks() {
-    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS);
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
     let text = "First paragraph with sentence one. Sentence two.\n\nSecond paragraph with sentence three. Sentence four.";
     let doc_id = DocumentId::new();
 
@@ -91,7 +91,7 @@ async fn given_multi_paragraph_text_when_semantic_splitter_splits_then_handles_p
 
 #[tokio::test]
 async fn given_empty_text_when_semantic_splitter_splits_then_returns_empty_chunks() {
-    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS);
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
     let text = "";
     let doc_id = DocumentId::new();
 
@@ -104,7 +104,7 @@ async fn given_empty_text_when_semantic_splitter_splits_then_returns_empty_chunk
 
 #[tokio::test]
 async fn given_text_without_punctuation_when_semantic_splitter_splits_then_returns_single_chunk() {
-    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS);
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
     let text = "This is text without proper punctuation";
     let doc_id = DocumentId::new();
 
@@ -116,11 +116,10 @@ async fn given_text_without_punctuation_when_semantic_splitter_splits_then_retur
 }
 
 #[tokio::test]
-async fn given_oversized_sentence_when_semantic_splitter_splits_then_falls_back_to_character_splitting()
- {
+async fn given_oversized_sentence_when_semantic_splitter_splits_then_falls_back_to_token_slicing() {
     let tight_limit = 50;
     let overlap = 10;
-    let splitter = SemanticSplitter::new(tight_limit, overlap);
+    let splitter = SemanticSplitter::new(tight_limit, overlap).unwrap();
 
     let oversized_sentence = "This is an extremely long sentence that contains a vast amount of information and will definitely exceed the token limit that we have set for chunking purposes, forcing the semantic splitter to fall back to character-based splitting to ensure no data loss occurs during the processing phase.";
     let doc_id = DocumentId::new();
@@ -154,7 +153,7 @@ async fn given_oversized_sentence_when_semantic_splitter_splits_then_falls_back_
 async fn given_document_with_oversized_sentence_when_semantic_splitter_splits_then_no_data_loss() {
     let tight_limit = 50;
     let overlap = 10;
-    let splitter = SemanticSplitter::new(tight_limit, overlap);
+    let splitter = SemanticSplitter::new(tight_limit, overlap).unwrap();
 
     let text = "This is a normal sentence. This is another normal sentence that should fit within limits. Now here comes an extremely long sentence with lots and lots of words that will definitely exceed our token limit and should trigger the fallback mechanism to prevent any data loss whatsoever. This is a final normal sentence.";
     let doc_id = DocumentId::new();
@@ -189,7 +188,7 @@ async fn given_1000_token_sentence_when_semantic_splitter_splits_with_512_limit_
  {
     let max_tokens = 512;
     let overlap = 50;
-    let splitter = SemanticSplitter::new(max_tokens, overlap);
+    let splitter = SemanticSplitter::new(max_tokens, overlap).unwrap();
 
     let long_sentence = "WHEREAS ".to_string()
         + &"the parties hereto agree to the following terms and conditions ".repeat(50)
@@ -222,4 +221,75 @@ async fn given_1000_token_sentence_when_semantic_splitter_splits_with_512_limit_
         combined_text.contains("binding upon execution"),
         "Should preserve end"
     );
+}
+
+/// Verifies the byte-index bug is fixed: Unicode text with multi-byte characters
+/// must not cause wrong character lookups or panics during sentence splitting.
+#[tokio::test]
+async fn given_unicode_multibyte_text_when_semantic_splitter_splits_then_produces_valid_chunks() {
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
+    let text = "Héllo wörld, this is sentence one. Ünïcödé tëxt hëre! Final séntence.";
+    let doc_id = DocumentId::new();
+
+    let result = splitter.split(text, doc_id, None).await;
+
+    assert!(result.is_ok());
+    let chunks = result.unwrap();
+    assert!(!chunks.is_empty(), "Unicode text should produce chunks");
+
+    for chunk in &chunks {
+        // Validate that each chunk is valid UTF-8 (would panic on slice mismatch)
+        assert!(std::str::from_utf8(chunk.text.as_bytes()).is_ok());
+    }
+}
+
+/// Verifies that two short paragraphs that together fit within max_tokens
+/// are merged into one chunk rather than forced into separate chunks.
+#[tokio::test]
+async fn given_two_short_paragraphs_when_semantic_splitter_splits_then_merges_into_single_chunk() {
+    let splitter = SemanticSplitter::new(STANDARD_TOKEN_LIMIT, STANDARD_OVERLAP_TOKENS).unwrap();
+    // Each paragraph is ~5 tokens; both should comfortably merge under 512.
+    let text = "Short first paragraph.\n\nShort second paragraph.";
+    let doc_id = DocumentId::new();
+
+    let result = splitter.split(text, doc_id, None).await;
+
+    assert!(result.is_ok());
+    let chunks = result.unwrap();
+    assert_eq!(
+        chunks.len(),
+        1,
+        "Two short paragraphs should merge into one chunk, got {} chunks",
+        chunks.len()
+    );
+    assert!(chunks[0].text.contains("Short first paragraph"));
+    assert!(chunks[0].text.contains("Short second paragraph"));
+}
+
+/// Verifies that chunk byte offsets point into the original text, not into
+/// accumulated chunk lengths (the global_offset drift bug).
+#[tokio::test]
+async fn given_multi_chunk_text_when_semantic_splitter_splits_then_offsets_point_into_original_text()
+ {
+    let splitter = SemanticSplitter::new(TIGHT_TOKEN_LIMIT, TIGHT_OVERLAP_TOKENS).unwrap();
+    let text = "First sentence here. Second sentence here. Third sentence here. Fourth sentence here. Fifth sentence here.";
+    let doc_id = DocumentId::new();
+
+    let result = splitter.split(text, doc_id, None).await;
+
+    assert!(result.is_ok());
+    let chunks = result.unwrap();
+
+    for chunk in &chunks {
+        let offset = chunk.offset;
+        // The text starting at `offset` in the original document should contain
+        // the first word of the chunk, proving the offset is not drifted.
+        let first_word = chunk.text.split_whitespace().next().unwrap_or("");
+        assert!(
+            text[offset..].starts_with(first_word),
+            "Chunk offset {} does not point to '{}' in original text",
+            offset,
+            first_word
+        );
+    }
 }

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tiktoken_rs::cl100k_base;
-use unicode_segmentation::UnicodeSegmentation;
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
 use crate::application::ports::{TextSplitter, TextSplitterError};
 use crate::domain::{Chunk, DocumentId, DocumentMetadata};
@@ -10,155 +9,153 @@ use crate::domain::{Chunk, DocumentId, DocumentMetadata};
 pub struct SemanticSplitter {
     max_tokens: usize,
     overlap_tokens: usize,
+    // Initialized once at construction to avoid repeated BPE vocabulary parsing
+    // in the inner loops of count_tokens.
+    tokenizer: CoreBPE,
 }
 
 impl SemanticSplitter {
-    pub fn new(max_tokens: usize, overlap_tokens: usize) -> Self {
-        Self {
-            max_tokens,
-            overlap_tokens,
-        }
-    }
-
-    fn count_tokens(&self, text: &str) -> Result<usize, TextSplitterError> {
-        let bpe = cl100k_base().map_err(|e| {
+    pub fn new(max_tokens: usize, overlap_tokens: usize) -> Result<Self, TextSplitterError> {
+        let tokenizer = cl100k_base().map_err(|e| {
             TextSplitterError::TokenizationFailed(format!("Failed to load tokenizer: {}", e))
         })?;
-        Ok(bpe.encode_with_special_tokens(text).len())
+        Ok(Self {
+            max_tokens,
+            overlap_tokens,
+            tokenizer,
+        })
     }
 
-    fn split_into_sentences(&self, text: &str) -> Vec<String> {
-        let mut sentences = Vec::new();
-        let mut current = String::new();
+    fn count_tokens(&self, text: &str) -> usize {
+        self.tokenizer.encode_with_special_tokens(text).len()
+    }
 
-        for grapheme in text.graphemes(true) {
-            current.push_str(grapheme);
+    fn split_into_sentences<'a>(&self, text: &'a str) -> Vec<&'a str> {
+        let mut sentences: Vec<&'a str> = Vec::new();
+        let mut start = 0;
+        let mut chars = text.char_indices().peekable();
 
-            if grapheme == "." || grapheme == "!" || grapheme == "?" {
-                if let Some(next_char) = text.chars().nth(current.len()) {
-                    if next_char.is_whitespace() || current.len() == text.len() {
-                        sentences.push(current.trim().to_string());
-                        current.clear();
+        while let Some((i, ch)) = chars.next() {
+            if ch == '.' || ch == '!' || ch == '?' {
+                // Sentence boundary only when followed by whitespace or end of text.
+                let is_boundary = match chars.peek() {
+                    None => true,
+                    Some((_, next)) => next.is_whitespace(),
+                };
+
+                if is_boundary {
+                    let slice = text[start..i + ch.len_utf8()].trim();
+                    if !slice.is_empty() {
+                        sentences.push(slice);
                     }
-                } else {
-                    sentences.push(current.trim().to_string());
-                    current.clear();
+                    // Advance past the whitespace separator (not consumed yet).
+                    start = i + ch.len_utf8();
                 }
             }
         }
 
-        if !current.trim().is_empty() {
-            sentences.push(current.trim().to_string());
+        // Trailing text without a terminal punctuation mark.
+        let tail = text[start..].trim();
+        if !tail.is_empty() {
+            sentences.push(tail);
         }
 
-        sentences.into_iter().filter(|s| !s.is_empty()).collect()
+        sentences
     }
 
-    fn split_oversized_sentence(&self, sentence: &str) -> Result<Vec<String>, TextSplitterError> {
-        let chars: Vec<char> = sentence.chars().collect();
-        let mut sub_chunks = Vec::new();
-        let mut offset = 0;
+    /// Splits a sentence that exceeds `max_tokens` by slicing the token array
+    /// (O(1) tokenizations). Decoding token sub-slices preserves all content
+    /// without data loss because every token ID maps back to exactly one string.
+    fn split_oversized_sentence(&self, sentence: &str) -> Vec<String> {
+        let tokens = self.tokenizer.encode_with_special_tokens(sentence);
+        let mut sub_chunks = Vec::with_capacity(tokens.len() / self.max_tokens + 1);
+        let mut token_offset = 0;
 
-        while offset < chars.len() {
-            let remaining = chars.len() - offset;
-            let mut low = 1;
-            let mut high = remaining;
-            let mut best_len = 1;
-
-            while low <= high {
-                let mid = (low + high) / 2;
-                let test_text: String = chars[offset..offset + mid].iter().collect();
-                let token_count = self.count_tokens(&test_text)?;
-
-                if token_count <= self.max_tokens {
-                    best_len = mid;
-                    low = mid + 1;
-                } else {
-                    high = mid - 1;
-                }
+        while token_offset < tokens.len() {
+            let end = (token_offset + self.max_tokens).min(tokens.len());
+            let slice = &tokens[token_offset..end];
+            let decoded = self.tokenizer.decode(slice.to_vec()).unwrap_or_default();
+            if !decoded.is_empty() {
+                sub_chunks.push(decoded);
             }
-
-            let chunk_text: String = chars[offset..offset + best_len].iter().collect();
-            sub_chunks.push(chunk_text);
-
-            offset += best_len;
+            token_offset = end;
         }
 
-        Ok(sub_chunks)
+        sub_chunks
     }
 
+    /// Merges sentences into chunks that stay within `max_tokens`, with overlap.
+    /// Short paragraphs / sentences are merged together when they fit.
     fn merge_sentences_into_chunks(
         &self,
-        sentences: Vec<String>,
+        sentences: &[&str],
     ) -> Result<Vec<String>, TextSplitterError> {
         if sentences.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut chunks = Vec::new();
-        let mut start_idx = 0;
+        let mut chunks: Vec<String> = Vec::new();
+        let mut idx = 0;
 
-        while start_idx < sentences.len() {
-            let mut current_chunk = String::new();
-            let mut current_tokens = 0;
-            let mut end_idx = start_idx;
+        while idx < sentences.len() {
+            let sentence = sentences[idx];
+            let sentence_tokens = self.count_tokens(sentence);
 
-            for (idx, sentence) in sentences.iter().enumerate().skip(start_idx) {
-                let sentence_tokens = self.count_tokens(sentence)?;
+            // Sentence alone overflows the limit — split it internally.
+            if sentence_tokens > self.max_tokens {
+                let sub = self.split_oversized_sentence(sentence);
+                chunks.extend(sub);
+                idx += 1;
+                continue;
+            }
 
-                if sentence_tokens > self.max_tokens {
-                    if !current_chunk.is_empty() {
-                        chunks.push(std::mem::take(&mut current_chunk));
-                    }
+            // Build a chunk by accumulating sentences until we hit the limit.
+            let mut current = String::from(sentence);
+            let mut current_tokens = sentence_tokens;
+            let chunk_start = idx;
+            idx += 1;
 
-                    let sub_chunks = self.split_oversized_sentence(sentence)?;
-                    chunks.extend(sub_chunks);
+            while idx < sentences.len() {
+                let next = sentences[idx];
+                let next_tokens = self.count_tokens(next);
 
-                    end_idx = idx;
-                    start_idx = idx + 1;
-
-                    continue;
-                }
-
-                if current_tokens + sentence_tokens > self.max_tokens && !current_chunk.is_empty() {
+                if next_tokens > self.max_tokens {
+                    // Next sentence overflows on its own — flush current, let next
+                    // iteration handle it.
                     break;
                 }
 
-                if !current_chunk.is_empty() {
-                    current_chunk.push(' ');
+                // +1 for the space separator we'd insert.
+                let separator_tokens = if current.is_empty() { 0 } else { 1 };
+                if current_tokens + separator_tokens + next_tokens > self.max_tokens {
+                    break;
                 }
-                current_chunk.push_str(sentence);
-                current_tokens += sentence_tokens;
-                end_idx = idx;
+
+                current.push(' ');
+                current.push_str(next);
+                current_tokens += separator_tokens + next_tokens;
+                idx += 1;
             }
 
-            if !current_chunk.is_empty() {
-                chunks.push(current_chunk);
-            }
+            let chunk_end = idx - 1; // inclusive last sentence index in this chunk
+            chunks.push(current);
 
-            if start_idx <= end_idx {
-                let mut overlap_idx = end_idx;
-                let mut overlap_tokens = 0;
+            // Compute overlap: walk backwards from chunk_end until we accumulate
+            // enough overlap tokens, then rewind idx to replay those sentences.
+            if idx < sentences.len() && self.overlap_tokens > 0 {
+                let mut overlap_tokens_acc = 0;
+                let mut overlap_start = chunk_end;
 
-                while overlap_idx > start_idx && overlap_tokens < self.overlap_tokens {
-                    let sentence_tokens = self.count_tokens(&sentences[overlap_idx])?;
-                    overlap_tokens += sentence_tokens;
-                    if overlap_idx > 0 {
-                        overlap_idx -= 1;
-                    } else {
-                        break;
+                while overlap_start > chunk_start && overlap_tokens_acc < self.overlap_tokens {
+                    overlap_tokens_acc += self.count_tokens(sentences[overlap_start]);
+                    if overlap_start > chunk_start {
+                        overlap_start -= 1;
                     }
                 }
 
-                start_idx = if overlap_idx < end_idx {
-                    overlap_idx + 1
-                } else {
-                    end_idx + 1
-                };
-            }
-
-            if start_idx <= end_idx && end_idx == sentences.len() - 1 {
-                break;
+                if overlap_start < chunk_end {
+                    idx = overlap_start + 1;
+                }
             }
         }
 
@@ -174,33 +171,64 @@ impl TextSplitter for SemanticSplitter {
         document_id: DocumentId,
         metadata: Option<Arc<DocumentMetadata>>,
     ) -> Result<Vec<Chunk>, TextSplitterError> {
-        let paragraphs: Vec<&str> = text
-            .split("\n\n")
-            .filter(|p| !p.trim().is_empty())
-            .collect();
+        // Collect paragraphs while tracking their byte start positions in `text`
+        // so offsets reflect the original document, not accumulated chunk lengths.
+        let mut paragraphs: Vec<(usize, &str)> = Vec::new();
+        let mut search_start = 0;
 
-        let mut all_chunks = Vec::new();
-        let mut global_offset = 0;
-
-        for paragraph in paragraphs {
-            let sentences = self.split_into_sentences(paragraph);
-            let chunk_texts = self.merge_sentences_into_chunks(sentences)?;
-
-            for chunk_text in chunk_texts {
-                let offset = global_offset;
-                let chunk = match &metadata {
-                    Some(meta) => Chunk::with_metadata(
-                        chunk_text.clone(),
-                        document_id,
-                        None,
-                        offset,
-                        Arc::clone(meta),
-                    ),
-                    None => Chunk::new(chunk_text.clone(), document_id, None, offset),
-                };
-                all_chunks.push(chunk);
-                global_offset += chunk_text.len();
+        for raw in text.split("\n\n") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                // Locate where this trimmed slice begins inside `text`.
+                let byte_pos = text[search_start..]
+                    .find(trimmed)
+                    .map(|rel| search_start + rel)
+                    .unwrap_or(search_start);
+                paragraphs.push((byte_pos, trimmed));
             }
+            search_start += raw.len() + 2; // +2 for the "\n\n" delimiter
+        }
+
+        // Collect all sentences across paragraphs into a unified pool so that
+        // short adjacent paragraphs can be merged into the same chunk.
+        let mut all_sentences: Vec<(&str, usize)> = Vec::new(); // (sentence, byte_offset_in_text)
+        for (para_offset, para) in &paragraphs {
+            for sentence in self.split_into_sentences(para) {
+                let byte_pos = text[*para_offset..]
+                    .find(sentence)
+                    .map(|rel| para_offset + rel)
+                    .unwrap_or(*para_offset);
+                all_sentences.push((sentence, byte_pos));
+            }
+        }
+
+        let sentence_texts: Vec<&str> = all_sentences.iter().map(|(s, _)| *s).collect();
+        let chunk_texts = self.merge_sentences_into_chunks(&sentence_texts)?;
+
+        // Assign byte offsets by locating each chunk's first word in `text`.
+        let mut all_chunks = Vec::with_capacity(chunk_texts.len());
+        let mut search_from = 0usize;
+
+        for chunk_text in chunk_texts {
+            let first_word = chunk_text.split_whitespace().next().unwrap_or(&chunk_text);
+            let offset = text[search_from..]
+                .find(first_word)
+                .map(|rel| search_from + rel)
+                .unwrap_or(search_from);
+
+            let chunk = match &metadata {
+                Some(meta) => Chunk::with_metadata(
+                    chunk_text.clone(),
+                    document_id,
+                    None,
+                    offset,
+                    Arc::clone(meta),
+                ),
+                None => Chunk::new(chunk_text.clone(), document_id, None, offset),
+            };
+            all_chunks.push(chunk);
+            // Advance search cursor to avoid re-matching earlier text.
+            search_from = offset;
         }
 
         Ok(all_chunks)
