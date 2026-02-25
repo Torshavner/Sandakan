@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use sandakan::application::ports::{
-    CollectionConfig, ConversationRepository, Embedder, EmbedderError, LlmClient, LlmClientError,
-    RepositoryError, SearchResult, VectorStore, VectorStoreError,
+    AgentMessage, CollectionConfig, ConversationRepository, Embedder, EmbedderError, LlmClient,
+    LlmClientError, LlmToolResponse, RepositoryError, SearchResult, ToolSchema, VectorStore,
+    VectorStoreError,
 };
 use sandakan::application::services::RetrievalService;
 use sandakan::domain::{
@@ -53,6 +54,30 @@ impl LlmClient for MockLlmClient {
         Ok(Box::pin(futures::stream::once(async {
             Ok("Mock answer".to_string())
         })))
+    }
+
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Mock answer".to_string())
+        })))
+    }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        Ok(LlmToolResponse::Content("Mock answer".to_string()))
     }
 }
 

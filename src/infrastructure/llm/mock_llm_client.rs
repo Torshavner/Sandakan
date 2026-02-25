@@ -1,4 +1,6 @@
-use crate::application::ports::{LlmClient, LlmClientError};
+use crate::application::ports::{
+    AgentMessage, LlmClient, LlmClientError, LlmTokenStream, LlmToolResponse, ToolSchema,
+};
 
 pub struct MockLlmClient;
 
@@ -12,16 +14,26 @@ impl LlmClient for MockLlmClient {
         &self,
         _prompt: &str,
         _context: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<
-                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
-            >,
-        >,
-        LlmClientError,
-    > {
+    ) -> Result<LlmTokenStream, LlmClientError> {
         Ok(Box::pin(futures::stream::once(async {
             Ok("Mock answer".to_string())
         })))
+    }
+
+    async fn complete_stream_with_messages(
+        &self,
+        _messages: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Mock agent answer".to_string())
+        })))
+    }
+
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        Ok(LlmToolResponse::Content("Mock agent answer".to_string()))
     }
 }

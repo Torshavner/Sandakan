@@ -5,12 +5,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use sandakan::application::ports::{
-    Embedder, EmbedderError, EvalEventError, EvalEventRepository, EvalOutboxError,
+    AgentMessage, Embedder, EmbedderError, EvalEventError, EvalEventRepository, EvalOutboxError,
     EvalOutboxRepository, EvalResultError, EvalResultRepository, LlmClient, LlmClientError,
+    LlmToolResponse, ToolSchema,
 };
 use sandakan::application::services::EvalWorker;
 use sandakan::domain::{
-    Embedding, EvalEvent, EvalEventId, EvalOutboxEntry, EvalResult, EvalSource,
+    Embedding, EvalEvent, EvalEventId, EvalOperationType, EvalOutboxEntry, EvalResult, EvalSource,
 };
 
 // --- Hand-written mocks ---
@@ -54,6 +55,26 @@ impl LlmClient for HighFaithfulnessJudge {
             Ok("0.95".to_string())
         })))
     }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        unimplemented!()
+    }
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        unimplemented!()
+    }
 }
 
 /// Judge that returns an unparseable score.
@@ -78,6 +99,26 @@ impl LlmClient for InvalidScoreJudge {
     > {
         unimplemented!()
     }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::stream::Stream<Item = Result<String, LlmClientError>> + Send + 'static,
+            >,
+        >,
+        LlmClientError,
+    > {
+        unimplemented!()
+    }
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        unimplemented!()
+    }
 }
 
 fn sample_eval_event(id: EvalEventId) -> EvalEvent {
@@ -92,6 +133,35 @@ fn sample_eval_event(id: EvalEventId) -> EvalEvent {
             score: 0.92,
         }],
         model_config: "test/model".to_string(),
+        operation_type: EvalOperationType::Query,
+    }
+}
+
+fn ingestion_eval_event(id: EvalEventId, chunk_count: usize) -> EvalEvent {
+    EvalEvent {
+        id,
+        timestamp: chrono::Utc::now(),
+        question: "document.pdf".to_string(),
+        generated_answer: chunk_count.to_string(),
+        retrieved_sources: vec![],
+        model_config: "test/model".to_string(),
+        operation_type: EvalOperationType::IngestionPdf,
+    }
+}
+
+fn agentic_eval_event(id: EvalEventId) -> EvalEvent {
+    EvalEvent {
+        id,
+        timestamp: chrono::Utc::now(),
+        question: "What does the agent know?".to_string(),
+        generated_answer: "The agent knows quite a lot.".to_string(),
+        retrieved_sources: vec![EvalSource {
+            text: "The agent has access to many tools.".to_string(),
+            page: None,
+            score: 0.85,
+        }],
+        model_config: "test/model".to_string(),
+        operation_type: EvalOperationType::AgenticRun,
     }
 }
 
@@ -420,4 +490,130 @@ async fn given_result_repository_fails_when_worker_processes_entry_then_outbox_i
     assert_eq!(processed, 1);
     assert_eq!(outbox.done_count().await, 0);
     assert_eq!(outbox.failed_count().await, 1);
+}
+
+#[tokio::test]
+async fn given_agentic_run_eval_event_when_worker_processes_then_llm_judge_called_and_result_persisted()
+ {
+    let event_id = EvalEventId::new();
+    let event = agentic_eval_event(event_id);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    assert_eq!(result_repo.save_count().await, 1);
+}
+
+#[tokio::test]
+async fn given_ingestion_pdf_eval_event_when_worker_processes_then_llm_client_not_called_and_result_persisted()
+ {
+    let event_id = EvalEventId::new();
+    // chunk_count > 0 → faithfulness = 1.0 without any LLM call
+    let event = ingestion_eval_event(event_id, 12);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    // InvalidScoreJudge would cause a failure if called — confirms no LLM call is made.
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
+        Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
+        0.7,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    assert_eq!(result_repo.save_count().await, 1);
+}
+
+#[tokio::test]
+async fn given_ingestion_pdf_with_zero_chunks_when_worker_processes_then_result_faithfulness_is_zero()
+ {
+    let event_id = EvalEventId::new();
+    let event = ingestion_eval_event(event_id, 0);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
+        Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
+        0.7,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].faithfulness, 0.0);
+    assert!(saved[0].below_threshold);
+}
+
+#[tokio::test]
+async fn given_query_eval_event_when_worker_processes_then_emits_query_operation_type() {
+    let event_id = EvalEventId::new();
+    let event = sample_eval_event(event_id);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(result_repo.save_count().await, 1);
 }

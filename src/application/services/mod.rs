@@ -1,4 +1,10 @@
 //! @AI: application services routing map
+//! - agent_service    -> AgentService: agentic ReAct loop (think → tool call → observe → answer).
+//!   Exposes AgentServicePort trait (for dyn dispatch from AppState), AgentChatRequest/Response,
+//!   AgentProgressEvent (Thinking | ToolCall | ToolResult | Reflection | CorrectionApplied),
+//!   AgentError, AgentServiceConfig, ReflectionSettings.
+//!   When eval enabled, fires-and-forgets EvalEvent after each agent turn.
+//!   When reflection enabled (agent.reflection.enabled), runs a critic pass after ReAct loop.
 //! - eval_metrics    -> compute_faithfulness (LLM-as-judge scoring, extracts f32 from first line,
 //!   rejects out-of-range values). Used by EvalWorker for background faithfulness scoring.
 //! - eval_worker     -> EvalWorker: background polling worker. Claims pending outbox entries,
@@ -11,6 +17,7 @@
 //!   When eval enabled, fires-and-forgets EvalEvent + eval_outbox row after each query.
 //! - token_counter     -> count_tokens(text): fast tiktoken-based token count for context trimming.
 
+mod agent_service;
 pub mod eval_metrics;
 mod eval_worker;
 mod ingestion_service;
@@ -18,8 +25,12 @@ mod ingestion_worker;
 mod retrieval_service;
 mod token_counter;
 
+pub use agent_service::{
+    AgentChatRequest, AgentChatResponse, AgentError, AgentProgressEvent, AgentService,
+    AgentServiceConfig, AgentServicePort, DEFAULT_AGENT_SYSTEM_PROMPT, ReflectionSettings,
+};
 pub use eval_worker::{EvalWorker, EvalWorkerError};
 pub use ingestion_service::{IngestionError, IngestionService};
 pub use ingestion_worker::{IngestionMessage, IngestionWorker, IngestionWorkerError};
-pub use retrieval_service::{QueryResponse, RetrievalError, RetrievalService, SourceChunk};
+pub use retrieval_service::{QueryResponse, RetrievalService, StreamingQueryResponse};
 pub use token_counter::count_tokens;

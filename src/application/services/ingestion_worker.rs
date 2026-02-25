@@ -3,10 +3,12 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    Embedder, FileLoader, JobRepository, StagingStore, TextSplitter, TranscriptionEngine,
-    VectorStore,
+    Embedder, EvalEventRepository, EvalOutboxRepository, FileLoader, JobRepository, StagingStore,
+    TextSplitter, TranscriptionEngine, VectorStore,
 };
-use crate::domain::{ContentType, Document, DocumentId, JobId, JobStatus, StoragePath};
+use crate::domain::{
+    ContentType, Document, EvalEvent, EvalOperationType, JobId, JobStatus, StoragePath,
+};
 
 pub struct IngestionMessage {
     pub job_id: JobId,
@@ -24,6 +26,9 @@ pub struct IngestionWorker<F, V, T: ?Sized> {
     job_repository: Arc<dyn JobRepository>,
     transcription_engine: Arc<dyn TranscriptionEngine>,
     staging_store: Arc<dyn StagingStore>,
+    eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
+    eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+    model_config: String,
 }
 
 impl<F, V, T: ?Sized> IngestionWorker<F, V, T>
@@ -52,7 +57,22 @@ where
             job_repository,
             transcription_engine,
             staging_store,
+            eval_event_repository: None,
+            eval_outbox_repository: None,
+            model_config: String::new(),
         }
+    }
+
+    pub fn with_eval(
+        mut self,
+        eval_event_repository: Arc<dyn EvalEventRepository>,
+        eval_outbox_repository: Arc<dyn EvalOutboxRepository>,
+        model_config: &str,
+    ) -> Self {
+        self.eval_event_repository = Some(eval_event_repository);
+        self.eval_outbox_repository = Some(eval_outbox_repository);
+        self.model_config = model_config.to_string();
+        self
     }
 
     pub async fn run(mut self) {
@@ -77,6 +97,7 @@ where
         let job_id = msg.job_id;
         let doc_id = msg.document.id;
         let content_type = msg.document.content_type;
+        let filename = msg.document.filename.clone();
 
         self.update_status(job_id, JobStatus::Processing, None)
             .await?;
@@ -86,7 +107,7 @@ where
             .await;
 
         match &result {
-            Ok(_) => {
+            Ok(chunk_count) => {
                 if msg.delete_after_processing {
                     if let Err(e) = self.staging_store.delete(&msg.storage_path).await {
                         tracing::warn!(
@@ -99,6 +120,7 @@ where
                 self.update_status(job_id, JobStatus::Completed, None)
                     .await?;
                 tracing::info!(document_id = %doc_id.as_uuid(), "Ingestion completed");
+                self.fire_and_forget_eval(content_type, &filename, *chunk_count);
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -119,13 +141,40 @@ where
         result.map(|_| ())
     }
 
+    fn fire_and_forget_eval(&self, content_type: ContentType, filename: &str, chunk_count: usize) {
+        if let (Some(event_repo), Some(outbox_repo)) =
+            (&self.eval_event_repository, &self.eval_outbox_repository)
+        {
+            let op_type = match content_type {
+                ContentType::Audio | ContentType::Video => EvalOperationType::IngestionMp4,
+                ContentType::Pdf => EvalOperationType::IngestionPdf,
+                // Text ingestion treated as a query-type event — no distinct scoring path needed.
+                ContentType::Text => EvalOperationType::Query,
+            };
+            let event =
+                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config);
+            let event_repo = Arc::clone(event_repo);
+            let outbox_repo = Arc::clone(outbox_repo);
+            tokio::spawn(async move {
+                match event_repo.record(&event).await {
+                    Ok(_) => {
+                        if let Err(e) = outbox_repo.enqueue(event.id).await {
+                            tracing::warn!(error = %e, "Failed to enqueue ingestion eval outbox");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to record ingestion eval event"),
+                }
+            });
+        }
+    }
+
     async fn process_pipeline(
         &self,
         job_id: JobId,
         document: &Document,
         storage_path: &StoragePath,
         content_type: ContentType,
-    ) -> Result<DocumentId, IngestionWorkerError> {
+    ) -> Result<usize, IngestionWorkerError> {
         let doc_id = document.id;
 
         let data = self
@@ -172,7 +221,7 @@ where
             .map_err(IngestionWorkerError::Splitting)?;
 
         if chunks.is_empty() {
-            return Ok(doc_id);
+            return Ok(0);
         }
 
         let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
@@ -187,7 +236,7 @@ where
             .await
             .map_err(IngestionWorkerError::VectorStore)?;
 
-        Ok(doc_id)
+        Ok(chunks.len())
     }
 
     async fn update_status(

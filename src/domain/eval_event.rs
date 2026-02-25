@@ -31,6 +31,27 @@ impl std::fmt::Display for EvalEventId {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalOperationType {
+    #[default]
+    Query,
+    AgenticRun,
+    IngestionPdf,
+    IngestionMp4,
+}
+
+impl EvalOperationType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::AgenticRun => "agentic_run",
+            Self::IngestionPdf => "ingestion_pdf",
+            Self::IngestionMp4 => "ingestion_mp4",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalSource {
     pub text: String,
@@ -46,9 +67,11 @@ pub struct EvalEvent {
     pub generated_answer: String,
     pub retrieved_sources: Vec<EvalSource>,
     pub model_config: String,
+    pub operation_type: EvalOperationType,
 }
 
 impl EvalEvent {
+    /// RAG query event — backward-compatible default.
     pub fn new(
         question: &str,
         generated_answer: &str,
@@ -62,6 +85,41 @@ impl EvalEvent {
             generated_answer: generated_answer.to_string(),
             retrieved_sources,
             model_config: model_config.to_string(),
+            operation_type: EvalOperationType::Query,
+        }
+    }
+
+    /// Agentic turn event — used by `AgentService`.
+    pub fn new_agentic(
+        question: &str,
+        generated_answer: &str,
+        retrieved_sources: Vec<EvalSource>,
+        model_config: &str,
+    ) -> Self {
+        Self {
+            operation_type: EvalOperationType::AgenticRun,
+            ..Self::new(question, generated_answer, retrieved_sources, model_config)
+        }
+    }
+
+    /// Ingestion pipeline event — used by `IngestionWorker`.
+    ///
+    /// `description` is the file name; `generated_answer` encodes `chunk_count`
+    /// so the worker can score structural validity without an LLM call.
+    pub fn new_ingestion(
+        operation_type: EvalOperationType,
+        description: &str,
+        chunk_count: usize,
+        model_config: &str,
+    ) -> Self {
+        Self {
+            id: EvalEventId::new(),
+            timestamp: Utc::now(),
+            question: description.to_string(),
+            generated_answer: chunk_count.to_string(),
+            retrieved_sources: vec![],
+            model_config: model_config.to_string(),
+            operation_type,
         }
     }
 

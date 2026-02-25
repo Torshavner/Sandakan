@@ -6,7 +6,9 @@ use crate::application::ports::{
     ConversationRepository, FileLoader, JobRepository, LlmClient, StagingStore, TextSplitter,
     VectorStore,
 };
-use crate::application::services::{IngestionMessage, IngestionService, RetrievalService};
+use crate::application::services::{
+    AgentServicePort, IngestionMessage, IngestionService, RetrievalService,
+};
 use crate::presentation::config::Settings;
 
 pub struct AppState<F, L, V, T: ?Sized>
@@ -22,6 +24,7 @@ where
     pub job_repository: Arc<dyn JobRepository>,
     pub ingestion_sender: mpsc::Sender<IngestionMessage>,
     pub staging_store: Arc<dyn StagingStore>,
+    pub agent_service: Option<Arc<dyn AgentServicePort>>,
     pub settings: Settings,
 }
 
@@ -40,6 +43,7 @@ where
             job_repository: Arc::clone(&self.job_repository),
             ingestion_sender: self.ingestion_sender.clone(),
             staging_store: Arc::clone(&self.staging_store),
+            agent_service: self.agent_service.as_ref().map(Arc::clone),
             settings: self.settings.clone(),
         }
     }
