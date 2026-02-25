@@ -5,7 +5,6 @@
 This architecture follows **Hexagonal (Ports & Adapters)** principles to ensure the AI agent can navigate, mock, and test components in isolation. It prioritizes **context window efficiency** by enforcing small, specialized files and a searchable domain graph.
 
 * **Core Principle:** Dependencies point inward (**L4 → L3 → L2 → L1**).
-* **AI Navigability:** Every domain module contains a `mod.rs` with a `/// @AI:` routing map.
 * **Concurrency:** Non-blocking async I/O via `tokio` with dedicated background workers for heavy lifting (Ingestion).
 
 ---
@@ -77,7 +76,7 @@ When modifying this architecture, the AI Agent must follow these state-managemen
 
 | Action | Required Architectural Step |
 | --- | --- |
-| **New Domain Added** | Create folder, add `mod.rs`, and register in the `/// @AI:` routing table. |
+| **New Domain Added** | Create folder, add `mod.rs`|
 | **New Provider Added** | Implement the L2 Trait in L3 and update the corresponding `Factory`. |
 | **Navigating Large Files** | Respect the `// @AI-BYPASS-LENGTH` header for configurations; otherwise, adhere to the file size limits and refactor triggers defined in Code Guidelines. |
 | **Testing Intent** | Route test execution intents strictly by directory: `mod tests` (Unit), `tests/integration/` (Offline/Mocked API), `tests/e2e/` (Containers). |

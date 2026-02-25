@@ -1,12 +1,3 @@
-//! @AI: persistence module routing map
-//! - eval_event     -> EvalEventRepository adapters: JsonlEvalEventRepository (append-only JSONL,
-//!   useful for offline CLI runs without a DB connection).
-//! - pg_pool        -> create_pool(): creates a PgPool from DATABASE_URL with max_connections cap.
-//! - repositories   -> PostgreSQL and mock adapters for Conversation, Job, EvalEvent, EvalOutbox,
-//!   and EvalResult ports. PgEvalResultRepository stores scored results; UNIQUE(eval_event_id)
-//!   enforces one result per event. MockEvalResultRepository for unit tests.
-//! - vector_store   -> QdrantAdapter implementing VectorStore; MockVectorStore for tests.
-
 mod eval_event;
 mod pg_pool;
 mod repositories;

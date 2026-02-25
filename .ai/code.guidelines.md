@@ -4,9 +4,6 @@
 
 To conserve context window and ensure deterministic navigation, this repository acts as a searchable graph. Top-level directories represent **business domains**, not technical layers.
 
-* **The Routing Table (`mod.rs`):** Every `mod.rs` MUST contain a `/// @AI:` doc block. This is strictly a semantic map connecting domain capabilities to file paths, never for explaining logic.
-* *Example:* `/// @AI: - refunds: Handles Stripe webhook processing -> mod refunds;`
-* **MANDATORY END-OF-TASK ACTION:** Whenever you implement a feature, extract a module, or modify a domain capability, **you MUST update the `/// @AI:` block in the relevant `mod.rs` file.** Never finish a task without syncing the routing map.
 * **The `wc -l` Gateway:** Large files destroy LLM attention. Before reading any implementation file, you MUST run `wc -l <filepath>`.
 * **The 250-Line Rule & The Bypass:** If a file exceeds 250 lines, it generally violates SRP.
 
