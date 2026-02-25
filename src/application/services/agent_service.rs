@@ -326,53 +326,55 @@ impl AgentService {
     ) -> Result<(String, Vec<AgentMessage>), AgentError> {
         let cfg = &self.config.reflection;
 
-        let critic_prompt = format!(
-            "{}\n\nCandidate answer:\n{}",
-            cfg.critic_system_prompt, candidate_answer
-        );
+        let mut current_answer = candidate_answer;
+        let tools = self.tool_registry.list_tools();
 
-        let raw = match self.llm_client.complete(&critic_prompt, "").await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "Critic LLM call failed; skipping reflection");
-                return Ok((candidate_answer, messages));
+        for _ in 0..cfg.correction_budget {
+            let critic_prompt = format!(
+                "{}\n\nCandidate answer:\n{}",
+                cfg.critic_system_prompt, current_answer
+            );
+
+            let raw = match self.llm_client.complete(&critic_prompt, "").await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Critic LLM call failed; skipping reflection");
+                    return Ok((current_answer, messages));
+                }
+            };
+
+            let (score, issues) = parse_critic_response(&raw);
+            let needs_correction = score < cfg.score_threshold;
+
+            let _ = progress_tx.try_send(AgentProgressEvent::Reflection {
+                score,
+                needs_correction,
+                issues: issues.clone(),
+            });
+
+            if !needs_correction {
+                return Ok((current_answer, messages));
             }
-        };
 
-        let (score, issues) = parse_critic_response(&raw);
+            let feedback = format!(
+                "Your previous answer scored {score:.2}/1.0 for completeness and grounding. Issues noted:\n{}\n\nPlease provide a corrected, more complete answer.",
+                issues.join(", ")
+            );
+            messages.push(AgentMessage::User(feedback));
 
-        let needs_correction = score < cfg.score_threshold && cfg.correction_budget > 0;
+            current_answer = match self
+                .llm_client
+                .complete_with_tools(&messages, &tools)
+                .await?
+            {
+                LlmToolResponse::Content(r) => r,
+                LlmToolResponse::ToolCalls(_) => return Ok((current_answer, messages)),
+            };
 
-        let _ = progress_tx.try_send(AgentProgressEvent::Reflection {
-            score,
-            needs_correction,
-            issues: issues.clone(),
-        });
-
-        if !needs_correction {
-            return Ok((candidate_answer, messages));
+            let _ = progress_tx.try_send(AgentProgressEvent::CorrectionApplied);
         }
 
-        let feedback = format!(
-            "Your previous answer scored {score:.2}/1.0 for completeness and grounding. Issues noted:\n{}\n\nPlease provide a corrected, more complete answer.",
-            issues.join(", ")
-        );
-        messages.push(AgentMessage::User(feedback));
-
-        let tools = self.tool_registry.list_tools();
-        let refined = match self
-            .llm_client
-            .complete_with_tools(&messages, &tools)
-            .await?
-        {
-            LlmToolResponse::Content(r) => r,
-            // If the LLM calls a tool instead of correcting, return the original answer.
-            LlmToolResponse::ToolCalls(_) => candidate_answer,
-        };
-
-        let _ = progress_tx.try_send(AgentProgressEvent::CorrectionApplied);
-
-        Ok((refined, messages))
+        Ok((current_answer, messages))
     }
 }
 

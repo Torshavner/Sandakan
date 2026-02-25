@@ -1267,22 +1267,219 @@ async fn given_correction_budget_zero_when_score_below_threshold_then_original_a
         "no correction should run when budget = 0"
     );
 
-    // Reflection event still emitted (we still evaluate), but needs_correction is false
-    // because budget = 0 means the condition `score < threshold AND budget > 0` is false.
     let reflection_events: Vec<_> = events
         .iter()
         .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
         .collect();
 
-    assert_eq!(reflection_events.len(), 1, "Reflection event still emitted");
+    assert!(
+        reflection_events.is_empty(),
+        "no Reflection event emitted when budget = 0 (loop never enters)"
+    );
+}
 
+// Mock: critic always scores below threshold; each correction is also below threshold.
+// Tracks how many times `complete` (critic) and `complete_with_tools` (correction) are called.
+struct MockLlmAlwaysLowScore {
+    critic_call_count: AtomicU32,
+    correction_call_count: AtomicU32,
+}
+
+impl MockLlmAlwaysLowScore {
+    fn new() -> Self {
+        Self {
+            critic_call_count: AtomicU32::new(0),
+            correction_call_count: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmAlwaysLowScore {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        self.critic_call_count.fetch_add(1, Ordering::SeqCst);
+        Ok("SCORE: 0.3\nISSUES: still incomplete".to_string())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("still weak".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let count = self.correction_call_count.fetch_add(1, Ordering::SeqCst);
+        if count == 0 {
+            Ok(LlmToolResponse::Content("initial weak answer".to_string()))
+        } else {
+            Ok(LlmToolResponse::Content("still weak answer".to_string()))
+        }
+    }
+}
+
+// Mock: critic returns low score on iterations 1 and 2, then passes on iteration 3.
+// Verifies that the loop exits early once the threshold is reached.
+struct MockLlmLowThenPassOnThirdCritic {
+    critic_call_count: AtomicU32,
+    correction_call_count: AtomicU32,
+}
+
+impl MockLlmLowThenPassOnThirdCritic {
+    fn new() -> Self {
+        Self {
+            critic_call_count: AtomicU32::new(0),
+            correction_call_count: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmLowThenPassOnThirdCritic {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        let n = self.critic_call_count.fetch_add(1, Ordering::SeqCst);
+        if n < 2 {
+            Ok("SCORE: 0.4\nISSUES: incomplete".to_string())
+        } else {
+            Ok("SCORE: 0.9\nISSUES: none".to_string())
+        }
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("refined answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let n = self.correction_call_count.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            Ok(LlmToolResponse::Content("initial answer".to_string()))
+        } else {
+            Ok(LlmToolResponse::Content("corrected answer".to_string()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn given_correction_budget_3_when_score_always_low_then_all_three_corrections_run() {
+    let llm = Arc::new(MockLlmAlwaysLowScore::new());
+    let llm_clone = llm.clone();
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 3));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "explain something".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert_eq!(
+        reflection_events.len(),
+        3,
+        "one Reflection event per budget iteration"
+    );
+    assert_eq!(
+        correction_events.len(),
+        3,
+        "CorrectionApplied emitted for every budget iteration when score stays low"
+    );
+    assert_eq!(
+        llm_clone.critic_call_count.load(Ordering::SeqCst),
+        3,
+        "critic LLM called exactly correction_budget times"
+    );
+}
+
+#[tokio::test]
+async fn given_correction_budget_5_when_second_correction_passes_threshold_then_loop_stops_early() {
+    let llm = Arc::new(MockLlmLowThenPassOnThirdCritic::new());
+    let llm_clone = llm.clone();
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 5));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "explain something".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert_eq!(
+        reflection_events.len(),
+        3,
+        "Reflection fires on iterations 1 and 2 (low) then on iteration 3 (passes) — 3 total"
+    );
+    assert_eq!(
+        correction_events.len(),
+        2,
+        "CorrectionApplied only for iterations where score was below threshold"
+    );
+    assert_eq!(
+        llm_clone.critic_call_count.load(Ordering::SeqCst),
+        3,
+        "critic stops after first passing score; remaining budget (5-3=2) unused"
+    );
+
+    let last_reflection = reflection_events.last().unwrap();
     if let AgentProgressEvent::Reflection {
-        needs_correction, ..
-    } = reflection_events[0]
+        score,
+        needs_correction,
+        ..
+    } = last_reflection
     {
+        assert!(*score >= 0.7, "final Reflection event must show passing score");
         assert!(
             !needs_correction,
-            "needs_correction must be false when budget = 0"
+            "final Reflection event must not request further correction"
         );
     }
 }
