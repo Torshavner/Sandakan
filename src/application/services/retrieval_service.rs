@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::Instrument;
 
 use crate::application::ports::{
     ConversationRepository, Embedder, EvalEventRepository, EvalOutboxRepository, LlmClient,
@@ -62,13 +63,14 @@ where
     }
 
     #[tracing::instrument(
-        skip(self, question, conversation_id),
+        skip(self, question, conversation_id, correlation_id),
         fields(retrieved_chunks_count, similarity_score)
     )]
     pub async fn query(
         &self,
         question: &str,
         conversation_id: Option<ConversationId>,
+        correlation_id: Option<String>,
     ) -> Result<QueryResponse, RetrievalError> {
         let query_embedding = self
             .embedder
@@ -169,19 +171,29 @@ where
                     score: s.score,
                 })
                 .collect();
-            let eval_event = EvalEvent::new(question, &answer, eval_sources, &self.model_config);
+            let eval_event = EvalEvent::new(
+                question,
+                &answer,
+                eval_sources,
+                &self.model_config,
+                correlation_id,
+            );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
-            tokio::spawn(async move {
-                match event_repo.record(&eval_event).await {
-                    Ok(_) => {
-                        if let Err(e) = outbox_repo.enqueue(eval_event.id).await {
-                            tracing::warn!(error = %e, "Failed to enqueue eval outbox");
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    match event_repo.record(&eval_event).await {
+                        Ok(_) => {
+                            if let Err(e) = outbox_repo.enqueue(eval_event.id).await {
+                                tracing::warn!(error = %e, "Failed to enqueue eval outbox");
+                            }
                         }
+                        Err(e) => tracing::warn!(error = %e, "Failed to record eval event"),
                     }
-                    Err(e) => tracing::warn!(error = %e, "Failed to record eval event"),
                 }
-            });
+                .instrument(span),
+            );
         }
 
         Ok(QueryResponse { answer, sources })

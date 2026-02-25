@@ -68,6 +68,10 @@ pub struct EvalEvent {
     pub retrieved_sources: Vec<EvalSource>,
     pub model_config: String,
     pub operation_type: EvalOperationType,
+    /// Propagated from the originating HTTP request so the EvalWorker can link
+    /// its scoring span back to the request trace in Tempo/Grafana.
+    #[serde(default)]
+    pub correlation_id: Option<String>,
 }
 
 impl EvalEvent {
@@ -77,6 +81,7 @@ impl EvalEvent {
         generated_answer: &str,
         retrieved_sources: Vec<EvalSource>,
         model_config: &str,
+        correlation_id: Option<String>,
     ) -> Self {
         Self {
             id: EvalEventId::new(),
@@ -86,6 +91,7 @@ impl EvalEvent {
             retrieved_sources,
             model_config: model_config.to_string(),
             operation_type: EvalOperationType::Query,
+            correlation_id,
         }
     }
 
@@ -95,10 +101,17 @@ impl EvalEvent {
         generated_answer: &str,
         retrieved_sources: Vec<EvalSource>,
         model_config: &str,
+        correlation_id: Option<String>,
     ) -> Self {
         Self {
             operation_type: EvalOperationType::AgenticRun,
-            ..Self::new(question, generated_answer, retrieved_sources, model_config)
+            ..Self::new(
+                question,
+                generated_answer,
+                retrieved_sources,
+                model_config,
+                correlation_id,
+            )
         }
     }
 
@@ -111,6 +124,7 @@ impl EvalEvent {
         description: &str,
         chunk_count: usize,
         model_config: &str,
+        correlation_id: Option<String>,
     ) -> Self {
         Self {
             id: EvalEventId::new(),
@@ -120,6 +134,7 @@ impl EvalEvent {
             retrieved_sources: vec![],
             model_config: model_config.to_string(),
             operation_type,
+            correlation_id,
         }
     }
 

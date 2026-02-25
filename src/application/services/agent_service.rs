@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::join_all;
+use tracing::Instrument;
 
 use crate::application::ports::{
     AgentMessage, ConversationRepository, EvalEventRepository, EvalOutboxRepository, LlmClient,
@@ -17,6 +18,7 @@ use crate::domain::{Conversation, ConversationId, EvalEvent, Message, MessageRol
 pub struct AgentChatRequest {
     pub conversation_id: Option<ConversationId>,
     pub user_message: String,
+    pub correlation_id: Option<String>,
 }
 
 pub struct AgentChatResponse {
@@ -310,7 +312,7 @@ impl AgentService {
         }
     }
 
-    fn fire_and_forget_eval(&self, question: &str, answer: &str) {
+    fn fire_and_forget_eval(&self, question: &str, answer: &str, correlation_id: Option<String>) {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
@@ -320,20 +322,29 @@ impl AgentService {
                 .map(|c| c.drain())
                 .unwrap_or_default();
 
-            let eval_event =
-                EvalEvent::new_agentic(question, answer, sources, &self.config.model_config);
+            let eval_event = EvalEvent::new_agentic(
+                question,
+                answer,
+                sources,
+                &self.config.model_config,
+                correlation_id,
+            );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
-            tokio::spawn(async move {
-                match event_repo.record(&eval_event).await {
-                    Ok(_) => {
-                        if let Err(e) = outbox_repo.enqueue(eval_event.id).await {
-                            tracing::warn!(error = %e, "Failed to enqueue agent eval outbox");
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    match event_repo.record(&eval_event).await {
+                        Ok(_) => {
+                            if let Err(e) = outbox_repo.enqueue(eval_event.id).await {
+                                tracing::warn!(error = %e, "Failed to enqueue agent eval outbox");
+                            }
                         }
+                        Err(e) => tracing::warn!(error = %e, "Failed to record agent eval event"),
                     }
-                    Err(e) => tracing::warn!(error = %e, "Failed to record agent eval event"),
                 }
-            });
+                .instrument(span),
+            );
         }
     }
 
@@ -447,7 +458,11 @@ impl AgentServicePort for AgentService {
         )
         .await;
 
-        self.fire_and_forget_eval(&request.user_message, &answer);
+        self.fire_and_forget_eval(
+            &request.user_message,
+            &answer,
+            request.correlation_id.clone(),
+        );
 
         // Fake-stream the already-buffered answer by splitting on whitespace.
         // This avoids a redundant LLM call (Option A): the ReAct loop already

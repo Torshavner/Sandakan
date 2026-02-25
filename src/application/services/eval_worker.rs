@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tracing::Instrument;
+
 use crate::application::ports::{
     Embedder, EvalEventRepository, EvalOutboxRepository, EvalResultRepository, LlmClient,
 };
@@ -79,10 +81,10 @@ impl EvalWorker {
             "eval_process",
             eval_event_id = %entry.eval_event_id,
             outbox_id = %entry.id,
+            correlation_id = tracing::field::Empty,
         );
-        let _guard = span.enter();
 
-        match self.score_and_persist(&entry).await {
+        match self.score_and_persist(&entry).instrument(span).await {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "Eval scoring failed");
@@ -109,6 +111,11 @@ impl EvalWorker {
                     entry.eval_event_id
                 ))
             })?;
+
+        // Record correlation_id onto the active span (set by .instrument() in process_entry).
+        if let Some(cid) = &event.correlation_id {
+            tracing::Span::current().record("correlation_id", cid.as_str());
+        }
 
         match event.operation_type {
             EvalOperationType::Query | EvalOperationType::AgenticRun => {

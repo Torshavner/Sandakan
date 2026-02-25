@@ -25,6 +25,7 @@ struct EvalEventRow {
     retrieved_sources: serde_json::Value,
     model_config: String,
     operation_type: String,
+    correlation_id: Option<String>,
 }
 
 fn parse_operation_type(s: &str) -> EvalOperationType {
@@ -48,6 +49,7 @@ fn row_to_event(r: EvalEventRow) -> Result<EvalEvent, EvalEventError> {
         retrieved_sources: sources,
         model_config: r.model_config,
         operation_type: parse_operation_type(&r.operation_type),
+        correlation_id: r.correlation_id,
     })
 }
 
@@ -61,8 +63,8 @@ impl EvalEventRepository for PgEvalEventRepository {
 
         sqlx::query!(
             r#"
-            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO NOTHING
             "#,
             id,
@@ -71,7 +73,8 @@ impl EvalEventRepository for PgEvalEventRepository {
             event.generated_answer,
             sources,
             event.model_config,
-            event.operation_type.as_str()
+            event.operation_type.as_str(),
+            event.correlation_id.as_deref()
         )
         .execute(&self.pool)
         .await
@@ -86,7 +89,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let row = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
             FROM eval_events
             WHERE id = $1
             "#,
@@ -104,7 +107,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
             FROM eval_events
             ORDER BY timestamp DESC
             "#
@@ -126,7 +129,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
             FROM eval_events
             ORDER BY RANDOM()
             LIMIT $1

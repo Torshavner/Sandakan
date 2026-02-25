@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::application::services::AgentChatRequest;
 use crate::domain::ConversationId;
+use crate::infrastructure::observability::CorrelationId;
 use crate::presentation::state::AppState;
 
 #[derive(Deserialize)]
@@ -20,11 +21,12 @@ pub struct AgentChatRequestBody {
 }
 
 #[tracing::instrument(
-    skip(state, body),
+    skip(state, correlation_id, body),
     fields(message_len = body.message.len())
 )]
 pub async fn agent_chat_handler<F, L, V, T>(
     State(state): State<AppState<F, L, V, T>>,
+    Extension(correlation_id): Extension<CorrelationId>,
     Json(body): Json<AgentChatRequestBody>,
 ) -> impl IntoResponse
 where
@@ -51,6 +53,7 @@ where
     let request = AgentChatRequest {
         conversation_id,
         user_message: body.message,
+        correlation_id: Some(correlation_id.0),
     };
 
     match service.chat(request).await {

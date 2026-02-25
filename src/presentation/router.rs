@@ -8,7 +8,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
-use crate::infrastructure::observability::request_id_middleware;
+use crate::infrastructure::observability::{correlation_id_middleware, request_id_middleware};
 use crate::presentation::handlers::{
     agent_chat_handler, chat_completions_handler, health_handler, ingest_handler,
     ingest_reference_handler, job_status_handler, models_handler, query_handler,
@@ -62,6 +62,7 @@ where
 
     router
         .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .layer(middleware::from_fn(correlation_id_middleware))
         .layer(middleware::from_fn(request_id_middleware))
         .layer(trace_layer)
         .layer(cors)

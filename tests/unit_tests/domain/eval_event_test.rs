@@ -44,7 +44,13 @@ fn given_eval_event_when_built_then_sources_match_input() {
         page: Some(5),
         score: 0.88,
     }];
-    let event = EvalEvent::new("Test question?", "Test answer.", sources, "lmstudio/llama3");
+    let event = EvalEvent::new(
+        "Test question?",
+        "Test answer.",
+        sources,
+        "lmstudio/llama3",
+        None,
+    );
 
     assert_eq!(event.question, "Test question?");
     assert_eq!(event.generated_answer, "Test answer.");
@@ -68,7 +74,7 @@ fn given_eval_event_with_multiple_sources_when_getting_context_text_then_joined_
             score: 0.8,
         },
     ];
-    let event = EvalEvent::new("Q?", "A.", sources, "model");
+    let event = EvalEvent::new("Q?", "A.", sources, "model", None);
     assert_eq!(event.context_text(), "First chunk\n\nSecond chunk");
 }
 
@@ -79,6 +85,7 @@ fn given_existing_new_constructor_when_creating_eval_event_then_operation_type_d
         "Retrieval-augmented generation.",
         vec![],
         "test/model",
+        None,
     );
     assert_eq!(event.operation_type, EvalOperationType::Query);
 }
@@ -90,7 +97,13 @@ fn given_new_agentic_constructor_when_creating_eval_event_then_operation_type_is
         page: None,
         score: 0.9,
     }];
-    let event = EvalEvent::new_agentic("Agent question?", "Agent answer.", sources, "test/model");
+    let event = EvalEvent::new_agentic(
+        "Agent question?",
+        "Agent answer.",
+        sources,
+        "test/model",
+        None,
+    );
     assert_eq!(event.operation_type, EvalOperationType::AgenticRun);
     assert_eq!(event.question, "Agent question?");
     assert_eq!(event.generated_answer, "Agent answer.");
@@ -104,6 +117,7 @@ fn given_new_ingestion_pdf_constructor_when_creating_eval_event_then_operation_t
         "document.pdf",
         42,
         "test/model",
+        None,
     );
     assert_eq!(event.operation_type, EvalOperationType::IngestionPdf);
     assert_eq!(event.question, "document.pdf");
@@ -119,6 +133,7 @@ fn given_new_ingestion_mp4_constructor_when_creating_eval_event_then_operation_t
         "video.mp4",
         15,
         "test/model",
+        None,
     );
     assert_eq!(event.operation_type, EvalOperationType::IngestionMp4);
     assert_eq!(event.generated_answer, "15");
@@ -131,6 +146,7 @@ fn given_ingestion_event_with_zero_chunks_when_checking_answer_then_chunk_count_
         "empty.pdf",
         0,
         "test/model",
+        None,
     );
     let chunk_count: usize = event.generated_answer.parse().unwrap();
     assert_eq!(chunk_count, 0);

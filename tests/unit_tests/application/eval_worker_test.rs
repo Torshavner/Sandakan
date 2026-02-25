@@ -134,6 +134,7 @@ fn sample_eval_event(id: EvalEventId) -> EvalEvent {
         }],
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::Query,
+        correlation_id: None,
     }
 }
 
@@ -146,6 +147,7 @@ fn ingestion_eval_event(id: EvalEventId, chunk_count: usize) -> EvalEvent {
         retrieved_sources: vec![],
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::IngestionPdf,
+        correlation_id: None,
     }
 }
 
@@ -162,6 +164,7 @@ fn agentic_eval_event(id: EvalEventId) -> EvalEvent {
         }],
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::AgenticRun,
+        correlation_id: None,
     }
 }
 

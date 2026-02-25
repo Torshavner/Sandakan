@@ -373,7 +373,7 @@ async fn given_high_similarity_results_when_querying_then_returns_llm_answer() {
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question", None).await.unwrap();
+    let result = service.query("test question", None, None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert!(!result.sources.is_empty());
@@ -399,7 +399,7 @@ async fn given_low_similarity_results_when_querying_then_returns_fallback() {
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question", None).await.unwrap();
+    let result = service.query("test question", None, None).await.unwrap();
 
     assert_eq!(result.answer, TEST_FALLBACK_MESSAGE);
     assert!(result.sources.is_empty());
@@ -425,7 +425,7 @@ async fn given_no_search_results_when_querying_then_returns_fallback() {
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question", None).await.unwrap();
+    let result = service.query("test question", None, None).await.unwrap();
 
     assert_eq!(result.answer, TEST_FALLBACK_MESSAGE);
     assert!(result.sources.is_empty());
@@ -451,7 +451,7 @@ async fn given_many_chunks_exceeding_budget_when_querying_then_context_is_trimme
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question", None).await.unwrap();
+    let result = service.query("test question", None, None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert!(!result.sources.is_empty());
@@ -477,7 +477,7 @@ async fn given_threshold_boundary_score_when_querying_then_includes_exact_match(
         TEST_FALLBACK_MESSAGE.to_string(),
     );
 
-    let result = service.query("test question", None).await.unwrap();
+    let result = service.query("test question", None, None).await.unwrap();
 
     assert_eq!(result.answer, "Mock answer");
     assert_eq!(result.sources.len(), 1);

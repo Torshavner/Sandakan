@@ -2,6 +2,7 @@ use axum::extract::Request;
 use axum::http::HeaderValue;
 use axum::middleware::Next;
 use axum::response::Response;
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -28,9 +29,7 @@ pub async fn request_id_middleware(mut request: Request, next: Next) -> Response
         uri = %request.uri().path()
     );
 
-    let _guard = span.enter();
-
-    let mut response = next.run(request).await;
+    let mut response = next.run(request).instrument(span).await;
 
     if let Ok(header_value) = HeaderValue::from_str(&request_id) {
         response

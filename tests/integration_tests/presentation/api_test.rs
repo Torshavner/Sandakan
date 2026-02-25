@@ -481,6 +481,52 @@ async fn given_valid_reference_when_ingesting_then_returns_accepted() {
 }
 
 #[tokio::test]
+async fn given_request_without_correlation_id_when_any_endpoint_then_response_contains_generated_uuid()
+ {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let header = response
+        .headers()
+        .get("x-correlation-id")
+        .expect("x-correlation-id must be present in response");
+
+    // Generated value must be a valid UUIDv4
+    let value = header.to_str().unwrap();
+    uuid::Uuid::parse_str(value).expect("generated correlation-id must be a valid UUID");
+}
+
+#[tokio::test]
+async fn given_request_with_correlation_id_when_any_endpoint_then_response_echoes_same_value() {
+    let app = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header("x-correlation-id", "custom-trace-abc-123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.headers().get("x-correlation-id").unwrap(),
+        "custom-trace-abc-123"
+    );
+}
+
+#[tokio::test]
 async fn given_unsupported_content_type_when_ingesting_reference_then_returns_415() {
     let app = create_test_app();
 

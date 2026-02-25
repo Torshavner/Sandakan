@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::domain::{Message, MessageRole};
-use crate::infrastructure::observability::sanitize_prompt;
+use crate::infrastructure::observability::{CorrelationId, sanitize_prompt};
 use crate::presentation::state::AppState;
 
 use super::openai_types::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse};
@@ -27,11 +27,12 @@ pub struct ChatError {
 }
 
 #[tracing::instrument(
-    skip(state, request),
+    skip(state, correlation_id, request),
     fields(model = %request.model, streaming = ?request.stream)
 )]
 pub async fn chat_completions_handler<F, L, V, T>(
     State(state): State<AppState<F, L, V, T>>,
+    Extension(correlation_id): Extension<CorrelationId>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse
 where
@@ -154,7 +155,11 @@ where
             }
         }
     } else {
-        match state.retrieval_service.query(&user_message, None).await {
+        match state
+            .retrieval_service
+            .query(&user_message, None, Some(correlation_id.0))
+            .await
+        {
             Ok(response) => {
                 tracing::info!("Chat completion successful");
                 let chat_response = ChatCompletionResponse::new(request.model, response.answer);

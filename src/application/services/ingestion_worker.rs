@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::application::ports::{
     Embedder, EvalEventRepository, EvalOutboxRepository, FileLoader, JobRepository, StagingStore,
@@ -84,9 +85,7 @@ where
                 document_id = %msg.document.id.as_uuid(),
                 filename = %msg.document.filename,
             );
-            let _guard = span.enter();
-
-            if let Err(e) = self.process_job(msg).await {
+            if let Err(e) = self.process_job(msg).instrument(span).await {
                 tracing::error!(error = %e, "Ingestion job failed");
             }
         }
@@ -152,19 +151,23 @@ where
                 ContentType::Text => EvalOperationType::Query,
             };
             let event =
-                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config);
+                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config, None);
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
-            tokio::spawn(async move {
-                match event_repo.record(&event).await {
-                    Ok(_) => {
-                        if let Err(e) = outbox_repo.enqueue(event.id).await {
-                            tracing::warn!(error = %e, "Failed to enqueue ingestion eval outbox");
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    match event_repo.record(&event).await {
+                        Ok(_) => {
+                            if let Err(e) = outbox_repo.enqueue(event.id).await {
+                                tracing::warn!(error = %e, "Failed to enqueue ingestion eval outbox");
+                            }
                         }
+                        Err(e) => tracing::warn!(error = %e, "Failed to record ingestion eval event"),
                     }
-                    Err(e) => tracing::warn!(error = %e, "Failed to record ingestion eval event"),
                 }
-            });
+                .instrument(span),
+            );
         }
     }
 

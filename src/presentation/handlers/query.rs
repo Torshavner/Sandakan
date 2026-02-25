@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
 use crate::domain::ConversationId;
-use crate::infrastructure::observability::sanitize_prompt;
+use crate::infrastructure::observability::{CorrelationId, sanitize_prompt};
 use crate::presentation::state::AppState;
 
 #[derive(Deserialize)]
@@ -34,9 +34,10 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-#[tracing::instrument(skip(state, request))]
+#[tracing::instrument(skip(state, correlation_id, request))]
 pub async fn query_handler<F, L, V, T>(
     State(state): State<AppState<F, L, V, T>>,
+    Extension(correlation_id): Extension<CorrelationId>,
     Json(request): Json<QueryRequest>,
 ) -> impl IntoResponse
 where
@@ -54,7 +55,7 @@ where
 
     match state
         .retrieval_service
-        .query(&request.question, conversation_id)
+        .query(&request.question, conversation_id, Some(correlation_id.0))
         .await
     {
         Ok(response) => {

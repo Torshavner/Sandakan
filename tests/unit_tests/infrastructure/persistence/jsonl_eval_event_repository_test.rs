@@ -13,6 +13,7 @@ fn make_event(question: &str) -> EvalEvent {
             score: 0.9,
         }],
         "lmstudio/llama3",
+        None,
     )
 }
 
@@ -99,6 +100,7 @@ async fn given_eval_event_when_serialized_and_recorded_then_all_fields_preserved
             },
         ],
         "azure/gpt-4",
+        None,
     );
 
     repo.record(&event).await.unwrap();

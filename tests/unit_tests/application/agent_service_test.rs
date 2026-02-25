@@ -285,6 +285,7 @@ async fn given_llm_returns_tool_call_then_content_when_chatting_then_react_loop_
     let request = AgentChatRequest {
         conversation_id: None,
         user_message: "What is the news?".to_string(),
+        correlation_id: None,
     };
 
     let result = service.chat(request).await;
@@ -310,6 +311,7 @@ async fn given_llm_always_returns_tool_calls_when_chatting_then_returns_max_iter
     let request = AgentChatRequest {
         conversation_id: None,
         user_message: "Loop forever".to_string(),
+        correlation_id: None,
     };
 
     let result = service.chat(request).await;
@@ -338,6 +340,7 @@ async fn given_mcp_client_fails_when_fail_fast_true_then_agent_returns_hard_tool
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Search something".to_string(),
+            correlation_id: None,
         })
         .await;
     let err = result.err();
@@ -357,6 +360,7 @@ async fn given_llm_returns_content_immediately_when_chatting_then_no_progress_ev
     let request = AgentChatRequest {
         conversation_id: None,
         user_message: "Simple question".to_string(),
+        correlation_id: None,
     };
 
     let result = service.chat(request).await.unwrap();
@@ -472,6 +476,7 @@ async fn given_llm_returns_two_tool_calls_when_executing_then_both_results_appea
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Do two things".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -527,6 +532,7 @@ async fn given_one_of_two_parallel_tool_calls_fails_when_fail_fast_true_then_age
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Do two things, one will fail".to_string(),
+            correlation_id: None,
         })
         .await;
 
@@ -653,6 +659,7 @@ async fn given_rag_tool_collects_sources_when_eval_enabled_then_eval_event_has_n
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "What does the KB say?".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -684,6 +691,7 @@ async fn given_no_rag_tool_invoked_when_eval_fires_then_eval_event_has_empty_sou
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "No RAG needed".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -706,6 +714,7 @@ async fn given_llm_returns_content_when_chatting_then_token_stream_yields_real_t
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Stream me an answer".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -744,6 +753,7 @@ async fn given_tool_fails_with_execution_error_when_fail_fast_false_then_agent_c
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Search something".to_string(),
+            correlation_id: None,
         })
         .await;
 
@@ -845,6 +855,7 @@ async fn given_tool_exceeds_timeout_when_fail_fast_false_then_agent_sees_timeout
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Call a slow tool".to_string(),
+            correlation_id: None,
         })
         .await;
 
@@ -881,6 +892,7 @@ async fn given_tool_not_found_when_fail_fast_false_then_agent_still_returns_hard
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Use missing tool".to_string(),
+            correlation_id: None,
         })
         .await;
 
@@ -1007,6 +1019,7 @@ async fn given_one_of_two_parallel_tools_fails_when_fail_fast_false_then_other_r
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Two parallel tools, one fails".to_string(),
+            correlation_id: None,
         })
         .await;
 
@@ -1139,6 +1152,7 @@ async fn given_high_quality_answer_when_reflection_enabled_then_no_correction_pa
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "What is Rust?".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1195,6 +1209,7 @@ async fn given_low_score_answer_when_reflection_enabled_then_correction_message_
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Explain something complex".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1248,6 +1263,7 @@ async fn given_correction_budget_zero_when_score_below_threshold_then_original_a
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Budget is zero".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1387,6 +1403,7 @@ async fn given_correction_budget_3_when_score_always_low_then_all_three_correcti
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "explain something".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1434,6 +1451,7 @@ async fn given_correction_budget_5_when_second_correction_passes_threshold_then_
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "explain something".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1537,6 +1555,7 @@ async fn given_reflection_disabled_when_agent_runs_then_critic_llm_not_called() 
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "Simple question".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
@@ -1577,6 +1596,7 @@ async fn given_critic_returns_unparseable_response_when_reflecting_then_answer_r
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "What does the critic say?".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed even with unparseable critic response");
@@ -1688,6 +1708,7 @@ async fn given_tool_result_with_ascii_content_when_truncating_then_progress_even
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "trigger ascii tool".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("should not panic on ascii content");
@@ -1723,6 +1744,7 @@ async fn given_tool_result_with_multibyte_utf8_when_truncating_then_no_panic_and
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "trigger multibyte tool".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("must not panic on multibyte UTF-8 content");
@@ -1773,6 +1795,7 @@ async fn given_tool_result_with_emoji_content_when_truncating_then_no_panic_and_
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "trigger emoji tool".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("must not panic on emoji content");
@@ -1820,6 +1843,7 @@ async fn given_tool_result_shorter_than_limit_when_truncating_then_content_retur
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "trigger short tool".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("should succeed");
@@ -1905,6 +1929,7 @@ async fn given_configured_system_prompt_when_agent_chat_called_then_system_messa
         .chat(AgentChatRequest {
             conversation_id: None,
             user_message: "hello".to_string(),
+            correlation_id: None,
         })
         .await
         .expect("chat should succeed");
