@@ -110,7 +110,7 @@ where
         let mut trimmed_chunks = Vec::new();
 
         for result in &filtered_results {
-            let chunk_tokens = count_tokens(&result.chunk.text);
+            let chunk_tokens = count_tokens(&result.chunk.as_contextual_string());
             if accumulated_tokens + chunk_tokens <= self.max_context_tokens {
                 accumulated_tokens += chunk_tokens;
                 trimmed_chunks.push(result);
@@ -127,7 +127,7 @@ where
 
         let context = trimmed_chunks
             .iter()
-            .map(|r| r.chunk.text.as_str())
+            .map(|r| r.chunk.as_contextual_string())
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -157,6 +157,13 @@ where
                 text: r.chunk.text.clone(),
                 page: r.chunk.page,
                 score: r.score,
+                title: r.chunk.metadata.as_ref().map(|m| m.title.clone()),
+                source_url: r.chunk.metadata.as_ref().and_then(|m| m.source_url.clone()),
+                content_type: r
+                    .chunk
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.content_type.as_mime().to_string()),
             })
             .collect();
 
@@ -250,7 +257,7 @@ where
         let mut trimmed_chunks = Vec::new();
 
         for result in &filtered_results {
-            let chunk_tokens = count_tokens(&result.chunk.text);
+            let chunk_tokens = count_tokens(&result.chunk.as_contextual_string());
             if accumulated_tokens + chunk_tokens <= self.max_context_tokens {
                 accumulated_tokens += chunk_tokens;
                 trimmed_chunks.push(result);
@@ -267,7 +274,7 @@ where
 
         let context = trimmed_chunks
             .iter()
-            .map(|r| r.chunk.text.as_str())
+            .map(|r| r.chunk.as_contextual_string())
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -283,6 +290,13 @@ where
                 text: r.chunk.text.clone(),
                 page: r.chunk.page,
                 score: r.score,
+                title: r.chunk.metadata.as_ref().map(|m| m.title.clone()),
+                source_url: r.chunk.metadata.as_ref().and_then(|m| m.source_url.clone()),
+                content_type: r
+                    .chunk
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.content_type.as_mime().to_string()),
             })
             .collect();
 
@@ -324,7 +338,7 @@ where
         let mut trimmed_chunks = Vec::new();
 
         for result in &filtered_results {
-            let chunk_tokens = count_tokens(&result.chunk.text);
+            let chunk_tokens = count_tokens(&result.chunk.as_contextual_string());
             if accumulated_tokens + chunk_tokens <= self.max_context_tokens {
                 accumulated_tokens += chunk_tokens;
                 trimmed_chunks.push(result);
@@ -339,6 +353,13 @@ where
                 text: r.chunk.text.clone(),
                 page: r.chunk.page,
                 score: r.score,
+                title: r.chunk.metadata.as_ref().map(|m| m.title.clone()),
+                source_url: r.chunk.metadata.as_ref().and_then(|m| m.source_url.clone()),
+                content_type: r
+                    .chunk
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.content_type.as_mime().to_string()),
             })
             .collect();
 

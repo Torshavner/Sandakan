@@ -1,5 +1,8 @@
 //! @AI: domain module routing map
 //! - chunk          -> Chunk (text + metadata), ChunkId (UUID newtype), DocumentId (UUID newtype).
+//!   Methods: new() (no metadata), with_metadata() (Arc<DocumentMetadata>), as_contextual_string().
+//! - document_metadata -> DocumentMetadata (title, content_type, source_url). Arc Flyweight shared
+//!   across all chunks from the same document. Constructor: from_document(&Document, Option<String>).
 //! - conversation   -> Conversation aggregate with ordered Message history.
 //! - conversation_id -> ConversationId (UUID newtype) with from_uuid / as_uuid.
 //! - document       -> Document value object; ContentType enum (Pdf | Text | Audio).
@@ -29,6 +32,7 @@ mod chunk;
 mod conversation;
 mod conversation_id;
 mod document;
+mod document_metadata;
 mod embedding;
 mod eval_entry;
 mod eval_event;
@@ -47,6 +51,7 @@ pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
 pub use conversation_id::ConversationId;
 pub use document::{ContentType, Document};
+pub use document_metadata::DocumentMetadata;
 pub use embedding::Embedding;
 pub use eval_entry::EvalEntry;
 pub use eval_event::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};

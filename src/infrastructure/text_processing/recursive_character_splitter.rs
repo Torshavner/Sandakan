@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::application::ports::{TextSplitter, TextSplitterError};
-use crate::domain::{Chunk, DocumentId};
+use crate::domain::{Chunk, DocumentId, DocumentMetadata};
 
 pub struct RecursiveCharacterSplitter {
     chunk_size: usize,
@@ -23,6 +25,7 @@ impl TextSplitter for RecursiveCharacterSplitter {
         &self,
         text: &str,
         document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
     ) -> Result<Vec<Chunk>, TextSplitterError> {
         let mut chunks = Vec::new();
         let chars: Vec<char> = text.chars().collect();
@@ -37,7 +40,13 @@ impl TextSplitter for RecursiveCharacterSplitter {
             let end = (offset + self.chunk_size).min(total_len);
             let chunk_text: String = chars[offset..end].iter().collect();
 
-            chunks.push(Chunk::new(chunk_text, document_id, None, offset));
+            let chunk = match &metadata {
+                Some(meta) => {
+                    Chunk::with_metadata(chunk_text, document_id, None, offset, Arc::clone(meta))
+                }
+                None => Chunk::new(chunk_text, document_id, None, offset),
+            };
+            chunks.push(chunk);
 
             let step = if self.chunk_size > self.chunk_overlap {
                 self.chunk_size - self.chunk_overlap

@@ -8,6 +8,9 @@ pub struct SourceChunk {
     pub text: String,
     pub page: Option<u32>,
     pub score: f32,
+    pub title: Option<String>,
+    pub source_url: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

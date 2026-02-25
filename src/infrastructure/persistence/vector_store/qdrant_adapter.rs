@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::application::ports::{
     CollectionConfig, DistanceMetric, PayloadFieldType, SearchResult, VectorStore, VectorStoreError,
 };
-use crate::domain::{Chunk, ChunkId, DocumentId, Embedding};
+use crate::domain::{Chunk, ChunkId, ContentType, DocumentId, DocumentMetadata, Embedding};
 
 pub struct QdrantAdapter {
     client: Arc<Qdrant>,
@@ -187,6 +187,23 @@ impl VectorStore for QdrantAdapter {
                     serde_json::Value::Number((chunk.offset as u64).into()),
                 );
 
+                if let Some(meta) = &chunk.metadata {
+                    payload.insert(
+                        "title".to_string(),
+                        serde_json::Value::String(meta.title.clone()),
+                    );
+                    payload.insert(
+                        "content_type".to_string(),
+                        serde_json::Value::String(meta.content_type.as_mime().to_string()),
+                    );
+                    if let Some(url) = &meta.source_url {
+                        payload.insert(
+                            "source_url".to_string(),
+                            serde_json::Value::String(url.clone()),
+                        );
+                    }
+                }
+
                 PointStruct::new(
                     PointId::from(chunk.id.as_uuid().to_string()),
                     embedding.values.clone(),
@@ -247,12 +264,30 @@ impl VectorStore for QdrantAdapter {
                     .map(|v| v as u32);
                 let offset = payload.get("offset")?.as_integer()? as usize;
 
+                let metadata = payload.get("title").and_then(|v| v.as_str()).map(|title| {
+                    let content_type = payload
+                        .get("content_type")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| ContentType::from_mime(s.as_str()))
+                        .unwrap_or(ContentType::Text);
+                    let source_url = payload
+                        .get("source_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    Arc::new(DocumentMetadata {
+                        title: title.to_string(),
+                        content_type,
+                        source_url,
+                    })
+                });
+
                 let chunk = Chunk {
                     id: ChunkId::from_uuid(chunk_id),
                     text,
                     document_id: DocumentId::from_uuid(document_id),
                     page,
                     offset,
+                    metadata,
                 };
 
                 Some(SearchResult {

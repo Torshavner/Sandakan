@@ -107,12 +107,17 @@ fn format_rag_response(chunks: &[SourceChunk]) -> String {
                 .map(|p| format!("Page {p}"))
                 .unwrap_or_else(|| "Page ?".to_string());
 
+            let label = match &chunk.title {
+                Some(title) => format!("{title} - {page_label}"),
+                None => page_label,
+            };
+
             let text = truncate_utf8(&chunk.text, 800);
 
             format!(
                 "{}. [{}, score: {:.2}]: {}",
                 i + 1,
-                page_label,
+                label,
                 chunk.score,
                 text
             )

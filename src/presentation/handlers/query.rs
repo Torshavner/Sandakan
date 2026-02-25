@@ -27,6 +27,12 @@ pub struct SourceChunk {
     pub text: String,
     pub page: Option<u32>,
     pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +73,9 @@ where
                     text: s.text,
                     page: s.page,
                     score: s.score,
+                    title: s.title,
+                    source_url: s.source_url,
+                    content_type: s.content_type,
                 })
                 .collect();
 

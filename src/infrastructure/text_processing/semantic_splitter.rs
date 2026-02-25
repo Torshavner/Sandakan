@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use tiktoken_rs::cl100k_base;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::application::ports::{TextSplitter, TextSplitterError};
-use crate::domain::{Chunk, DocumentId};
+use crate::domain::{Chunk, DocumentId, DocumentMetadata};
 
 pub struct SemanticSplitter {
     max_tokens: usize,
@@ -170,6 +172,7 @@ impl TextSplitter for SemanticSplitter {
         &self,
         text: &str,
         document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
     ) -> Result<Vec<Chunk>, TextSplitterError> {
         let paragraphs: Vec<&str> = text
             .split("\n\n")
@@ -185,7 +188,17 @@ impl TextSplitter for SemanticSplitter {
 
             for chunk_text in chunk_texts {
                 let offset = global_offset;
-                all_chunks.push(Chunk::new(chunk_text.clone(), document_id, None, offset));
+                let chunk = match &metadata {
+                    Some(meta) => Chunk::with_metadata(
+                        chunk_text.clone(),
+                        document_id,
+                        None,
+                        offset,
+                        Arc::clone(meta),
+                    ),
+                    None => Chunk::new(chunk_text.clone(), document_id, None, offset),
+                };
+                all_chunks.push(chunk);
                 global_offset += chunk_text.len();
             }
         }

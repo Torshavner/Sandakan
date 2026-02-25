@@ -15,7 +15,7 @@ async fn given_text_when_recursive_character_splitter_splits_then_creates_fixed_
     let text = "This is a test document with some content.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -32,7 +32,7 @@ async fn given_empty_text_when_recursive_character_splitter_splits_then_returns_
     let text = "";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -46,7 +46,7 @@ async fn given_multi_sentence_text_when_semantic_splitter_splits_then_chunks_ter
     let text = "First sentence. Second sentence! Third sentence? Fourth sentence.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -69,7 +69,7 @@ async fn given_long_text_when_semantic_splitter_splits_with_tight_limit_then_res
     let text = "This is the first sentence. This is the second sentence. This is the third sentence. This is the fourth sentence. This is the fifth sentence.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -82,7 +82,7 @@ async fn given_multi_paragraph_text_when_semantic_splitter_splits_then_handles_p
     let text = "First paragraph with sentence one. Sentence two.\n\nSecond paragraph with sentence three. Sentence four.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -95,7 +95,7 @@ async fn given_empty_text_when_semantic_splitter_splits_then_returns_empty_chunk
     let text = "";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -108,7 +108,7 @@ async fn given_text_without_punctuation_when_semantic_splitter_splits_then_retur
     let text = "This is text without proper punctuation";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -125,7 +125,7 @@ async fn given_oversized_sentence_when_semantic_splitter_splits_then_falls_back_
     let oversized_sentence = "This is an extremely long sentence that contains a vast amount of information and will definitely exceed the token limit that we have set for chunking purposes, forcing the semantic splitter to fall back to character-based splitting to ensure no data loss occurs during the processing phase.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(oversized_sentence, doc_id).await;
+    let result = splitter.split(oversized_sentence, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -159,7 +159,7 @@ async fn given_document_with_oversized_sentence_when_semantic_splitter_splits_th
     let text = "This is a normal sentence. This is another normal sentence that should fit within limits. Now here comes an extremely long sentence with lots and lots of words that will definitely exceed our token limit and should trigger the fallback mechanism to prevent any data loss whatsoever. This is a final normal sentence.";
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(text, doc_id).await;
+    let result = splitter.split(text, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();
@@ -197,7 +197,7 @@ async fn given_1000_token_sentence_when_semantic_splitter_splits_with_512_limit_
 
     let doc_id = DocumentId::new();
 
-    let result = splitter.split(&long_sentence, doc_id).await;
+    let result = splitter.split(&long_sentence, doc_id, None).await;
 
     assert!(result.is_ok());
     let chunks = result.unwrap();

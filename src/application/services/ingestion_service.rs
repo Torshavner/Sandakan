@@ -4,7 +4,7 @@ use crate::application::ports::{
     Embedder, EmbedderError, FileLoader, FileLoaderError, JobRepository, RepositoryError,
     TextSplitter, TextSplitterError, VectorStore, VectorStoreError,
 };
-use crate::domain::{ContentType, Document, DocumentId, Job, JobStatus};
+use crate::domain::{ContentType, Document, DocumentId, DocumentMetadata, Job, JobStatus};
 
 pub struct IngestionService<F, V, T: ?Sized>
 where
@@ -70,9 +70,11 @@ where
                 .await
                 .map_err(IngestionError::FileLoading)?;
 
+            let metadata = Arc::new(DocumentMetadata::from_document(&document, None));
+
             let chunks = self
                 .text_splitter
-                .split(&text, doc_id)
+                .split(&text, doc_id, Some(Arc::clone(&metadata)))
                 .await
                 .map_err(IngestionError::Splitting)?;
 
@@ -80,7 +82,9 @@ where
                 return Ok(doc_id);
             }
 
-            let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+            let contextual_strings: Vec<String> =
+                chunks.iter().map(|c| c.as_contextual_string()).collect();
+            let texts: Vec<&str> = contextual_strings.iter().map(String::as_str).collect();
             let embeddings = self
                 .embedder
                 .embed_batch(&texts)

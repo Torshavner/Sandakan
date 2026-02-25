@@ -7,7 +7,7 @@ use sandakan::application::ports::{
 };
 use sandakan::application::services::RetrievalService;
 use sandakan::domain::{
-    Chunk, ChunkId, Conversation, ConversationId, DocumentId, Embedding, Message,
+    Chunk, ChunkId, Conversation, ConversationId, DocumentId, DocumentMetadata, Embedding, Message,
 };
 
 const TEST_TOP_K: usize = 5;
@@ -482,4 +482,101 @@ async fn given_threshold_boundary_score_when_querying_then_includes_exact_match(
     assert_eq!(result.answer, "Mock answer");
     assert_eq!(result.sources.len(), 1);
     assert_eq!(result.sources[0].score, 0.7);
+}
+
+// ─── Metadata propagation ────────────────────────────────────────────────────
+
+struct MockVectorStoreWithMetadata;
+
+#[async_trait::async_trait]
+impl VectorStore for MockVectorStoreWithMetadata {
+    async fn create_collection(
+        &self,
+        _config: &CollectionConfig,
+    ) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn collection_exists(&self) -> Result<bool, VectorStoreError> {
+        Ok(true)
+    }
+
+    async fn get_collection_vector_size(&self) -> Result<Option<u64>, VectorStoreError> {
+        Ok(Some(384))
+    }
+
+    async fn delete_collection(&self) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+
+    async fn upsert(
+        &self,
+        _chunks: &[Chunk],
+        _embeddings: &[Embedding],
+    ) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+
+    async fn search(
+        &self,
+        _embedding: &Embedding,
+        _top_k: usize,
+    ) -> Result<Vec<SearchResult>, VectorStoreError> {
+        use sandakan::domain::ContentType;
+        use std::sync::Arc;
+        let meta = Arc::new(DocumentMetadata {
+            title: "Annual Report 2024".to_string(),
+            content_type: ContentType::Pdf,
+            source_url: Some("https://example.com/report.pdf".to_string()),
+        });
+        Ok(vec![SearchResult {
+            chunk: Chunk::with_metadata(
+                "Revenue grew by 20% year-over-year.".to_string(),
+                DocumentId::new(),
+                Some(5),
+                0,
+                meta,
+            ),
+            score: 0.92,
+        }])
+    }
+
+    async fn delete(&self, _chunk_ids: &[ChunkId]) -> Result<(), VectorStoreError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn given_chunks_with_metadata_when_querying_then_sources_include_title_and_url() {
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
+    let llm_client = Arc::new(MockLlmClient);
+    let vector_store = Arc::new(MockVectorStoreWithMetadata);
+
+    let service = RetrievalService::new(
+        embedder,
+        llm_client,
+        vector_store,
+        mock_conversation_repository(),
+        None,
+        None,
+        "test/mock-model".to_string(),
+        TEST_TOP_K,
+        TEST_SIMILARITY_THRESHOLD,
+        TEST_MAX_CONTEXT_TOKENS,
+        TEST_FALLBACK_MESSAGE.to_string(),
+    );
+
+    let result = service
+        .query("What was revenue growth?", None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.sources.len(), 1);
+    let source = &result.sources[0];
+    assert_eq!(source.title.as_deref(), Some("Annual Report 2024"));
+    assert_eq!(
+        source.source_url.as_deref(),
+        Some("https://example.com/report.pdf")
+    );
+    assert_eq!(source.content_type.as_deref(), Some("application/pdf"));
 }

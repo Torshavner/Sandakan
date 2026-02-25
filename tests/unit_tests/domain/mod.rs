@@ -1,4 +1,5 @@
 mod chunk_test;
+mod document_metadata_test;
 mod document_test;
 mod embedding_test;
 mod eval_event_test;

@@ -8,7 +8,8 @@ use crate::application::ports::{
     TextSplitter, TranscriptionEngine, VectorStore,
 };
 use crate::domain::{
-    ContentType, Document, EvalEvent, EvalOperationType, JobId, JobStatus, StoragePath,
+    ContentType, Document, DocumentMetadata, EvalEvent, EvalOperationType, JobId, JobStatus,
+    StoragePath,
 };
 
 pub struct IngestionMessage {
@@ -217,9 +218,11 @@ where
         self.update_status(job_id, JobStatus::Embedding, None)
             .await?;
 
+        let metadata = Arc::new(DocumentMetadata::from_document(document, None));
+
         let chunks = self
             .text_splitter
-            .split(&text, doc_id)
+            .split(&text, doc_id, Some(Arc::clone(&metadata)))
             .await
             .map_err(IngestionWorkerError::Splitting)?;
 
@@ -227,7 +230,9 @@ where
             return Ok(0);
         }
 
-        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        let contextual_strings: Vec<String> =
+            chunks.iter().map(|c| c.as_contextual_string()).collect();
+        let texts: Vec<&str> = contextual_strings.iter().map(String::as_str).collect();
         let embeddings = self
             .embedder
             .embed_batch(&texts)

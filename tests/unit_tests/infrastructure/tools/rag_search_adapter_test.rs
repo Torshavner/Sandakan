@@ -49,11 +49,17 @@ async fn given_chunks_returned_by_port_when_executing_rag_search_then_formats_nu
             text: "Rust is a systems programming language.".to_string(),
             page: Some(1),
             score: 0.95,
+            title: None,
+            source_url: None,
+            content_type: None,
         },
         SourceChunk {
             text: "It focuses on safety and performance.".to_string(),
             page: Some(2),
             score: 0.88,
+            title: None,
+            source_url: None,
+            content_type: None,
         },
     ];
     let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
@@ -108,6 +114,9 @@ async fn given_chunk_text_exceeds_800_chars_when_formatting_response_then_text_i
         text: long_text,
         page: None,
         score: 0.80,
+        title: None,
+        source_url: None,
+        content_type: None,
     }];
     let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
 

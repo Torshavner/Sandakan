@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use uuid::Uuid;
+
+use super::document_metadata::DocumentMetadata;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chunk {
@@ -7,6 +11,7 @@ pub struct Chunk {
     pub document_id: DocumentId,
     pub page: Option<u32>,
     pub offset: usize,
+    pub metadata: Option<Arc<DocumentMetadata>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -56,6 +61,7 @@ impl Default for DocumentId {
 }
 
 impl Chunk {
+    /// Creates a chunk without document metadata (backward-compatible).
     pub fn new(text: String, document_id: DocumentId, page: Option<u32>, offset: usize) -> Self {
         Self {
             id: ChunkId::new(),
@@ -63,6 +69,45 @@ impl Chunk {
             document_id,
             page,
             offset,
+            metadata: None,
+        }
+    }
+
+    /// Creates a chunk with document-level metadata attached.
+    pub fn with_metadata(
+        text: String,
+        document_id: DocumentId,
+        page: Option<u32>,
+        offset: usize,
+        metadata: Arc<DocumentMetadata>,
+    ) -> Self {
+        Self {
+            id: ChunkId::new(),
+            text,
+            document_id,
+            page,
+            offset,
+            metadata: Some(metadata),
+        }
+    }
+
+    /// Returns an embedding-ready string that includes document context when available.
+    ///
+    /// Enriching embeddings with title and page guides the model toward semantically
+    /// distinct vectors for identical text from different documents.
+    pub fn as_contextual_string(&self) -> String {
+        match &self.metadata {
+            Some(meta) => {
+                let page_label = self
+                    .page
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "N/A".to_string());
+                format!(
+                    "Title: {}\nPage: {}\nContent: {}",
+                    meta.title, page_label, self.text
+                )
+            }
+            None => self.text.clone(),
         }
     }
 }

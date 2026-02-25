@@ -1,13 +1,16 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
-use crate::domain::Chunk;
+use crate::domain::{Chunk, DocumentId, DocumentMetadata};
 
 #[async_trait]
 pub trait TextSplitter: Send + Sync {
     async fn split(
         &self,
         text: &str,
-        document_id: crate::domain::DocumentId,
+        document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
     ) -> Result<Vec<Chunk>, TextSplitterError>;
 }
 
