@@ -5,7 +5,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::ports::{EvalEventError, EvalEventRepository};
-use crate::domain::{EvalEvent, EvalEventId, EvalSource};
+use crate::domain::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
 
 pub struct PgEvalEventRepository {
     pool: PgPool,
@@ -24,6 +24,17 @@ struct EvalEventRow {
     generated_answer: String,
     retrieved_sources: serde_json::Value,
     model_config: String,
+    operation_type: String,
+}
+
+fn parse_operation_type(s: &str) -> EvalOperationType {
+    match s {
+        "agentic_run" => EvalOperationType::AgenticRun,
+        "ingestion_pdf" => EvalOperationType::IngestionPdf,
+        "ingestion_mp4" => EvalOperationType::IngestionMp4,
+        // default covers "query" and any legacy unknown values
+        _ => EvalOperationType::Query,
+    }
 }
 
 fn row_to_event(r: EvalEventRow) -> Result<EvalEvent, EvalEventError> {
@@ -36,6 +47,7 @@ fn row_to_event(r: EvalEventRow) -> Result<EvalEvent, EvalEventError> {
         generated_answer: r.generated_answer,
         retrieved_sources: sources,
         model_config: r.model_config,
+        operation_type: parse_operation_type(&r.operation_type),
     })
 }
 
@@ -49,8 +61,8 @@ impl EvalEventRepository for PgEvalEventRepository {
 
         sqlx::query!(
             r#"
-            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO NOTHING
             "#,
             id,
@@ -58,7 +70,8 @@ impl EvalEventRepository for PgEvalEventRepository {
             event.question,
             event.generated_answer,
             sources,
-            event.model_config
+            event.model_config,
+            event.operation_type.as_str()
         )
         .execute(&self.pool)
         .await
@@ -73,7 +86,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let row = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
             FROM eval_events
             WHERE id = $1
             "#,
@@ -91,7 +104,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
             FROM eval_events
             ORDER BY timestamp DESC
             "#
@@ -113,7 +126,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type
             FROM eval_events
             ORDER BY RANDOM()
             LIMIT $1

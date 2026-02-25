@@ -8,6 +8,8 @@
 //!   Fields: question (required), expected_answer (required), expected_source_pages: Option<Vec<u32>> (default None).
 //! - eval_event     -> EvalEvent captured passively during RAG queries. EvalSource (text, page, score).
 //!   EvalEventId with from_uuid / as_uuid. context_text() joins sources with "\n\n".
+//!   EvalOperationType enum (Query | AgenticRun | IngestionPdf | IngestionMp4) with as_str().
+//!   Constructors: new() → Query, new_agentic() → AgenticRun, new_ingestion() → Pdf/Mp4.
 //! - eval_outbox    -> EvalOutboxEntry (durable outbox row for background scoring) and
 //!   EvalOutboxStatus (Pending | Processing | Done | Failed). Serde-ready for US-017 broker bounds.
 //! - eval_result    -> EvalResult persisted scoring outcome; EvalResultId (UUID newtype with from_uuid/as_uuid).
@@ -16,10 +18,12 @@
 //! - job            -> Job aggregate for ingestion pipeline lifecycle tracking.
 //! - job_id         -> JobId (UUID newtype).
 //! - job_status     -> JobStatus enum (Queued | Processing | Done | Failed).
-//! - message        -> Message value object (id, conversation_id, role, content, created_at).
+//! - message        -> Message value object (id, conversation_id, role, content, tool_call_id, created_at).
 //! - message_id     -> MessageId (UUID newtype).
-//! - message_role   -> MessageRole enum (User | Assistant | System) with as_str() / parse().
+//! - message_role   -> MessageRole enum (User | Assistant | System | Tool | ToolResponse) with as_str() / parse().
 //! - storage_path   -> StoragePath value object for staging store file references.
+//! - tool_call      -> ToolCallId (String newtype), ToolName (String newtype),
+//!   ToolCall (id + name + arguments: Value), ToolResult (tool_call_id + tool_name + content).
 
 mod chunk;
 mod conversation;
@@ -37,6 +41,7 @@ mod message;
 mod message_id;
 mod message_role;
 mod storage_path;
+mod tool_call;
 
 pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
@@ -44,7 +49,7 @@ pub use conversation_id::ConversationId;
 pub use document::{ContentType, Document};
 pub use embedding::Embedding;
 pub use eval_entry::EvalEntry;
-pub use eval_event::{EvalEvent, EvalEventId, EvalSource};
+pub use eval_event::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
 pub use eval_outbox::{EvalOutboxEntry, EvalOutboxStatus};
 pub use eval_result::{EvalResult, EvalResultId};
 pub use job::Job;
@@ -54,3 +59,4 @@ pub use message::Message;
 pub use message_id::MessageId;
 pub use message_role::MessageRole;
 pub use storage_path::StoragePath;
+pub use tool_call::{ToolCall, ToolCallId, ToolName, ToolResult};

@@ -5,7 +5,7 @@ use crate::application::ports::{
     Embedder, EvalEventRepository, EvalOutboxRepository, EvalResultRepository, LlmClient,
 };
 use crate::application::services::eval_metrics;
-use crate::domain::{EvalOutboxEntry, EvalResult};
+use crate::domain::{EvalOperationType, EvalOutboxEntry, EvalResult};
 
 pub struct EvalWorker {
     outbox_repository: Arc<dyn EvalOutboxRepository>,
@@ -82,7 +82,7 @@ impl EvalWorker {
         );
         let _guard = span.enter();
 
-        match self.evaluate_and_emit(&entry).await {
+        match self.score_and_persist(&entry).await {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "Eval scoring failed");
@@ -97,7 +97,7 @@ impl EvalWorker {
         }
     }
 
-    async fn evaluate_and_emit(&self, entry: &EvalOutboxEntry) -> Result<(), EvalWorkerError> {
+    async fn score_and_persist(&self, entry: &EvalOutboxEntry) -> Result<(), EvalWorkerError> {
         let event = self
             .event_repository
             .get(entry.eval_event_id)
@@ -110,6 +110,21 @@ impl EvalWorker {
                 ))
             })?;
 
+        match event.operation_type {
+            EvalOperationType::Query | EvalOperationType::AgenticRun => {
+                self.score_llm_based(entry, &event).await
+            }
+            EvalOperationType::IngestionPdf | EvalOperationType::IngestionMp4 => {
+                self.score_ingestion(entry, &event).await
+            }
+        }
+    }
+
+    async fn score_llm_based(
+        &self,
+        entry: &EvalOutboxEntry,
+        event: &crate::domain::EvalEvent,
+    ) -> Result<(), EvalWorkerError> {
         let context = event.context_text();
 
         let faithfulness = eval_metrics::compute_faithfulness(
@@ -136,10 +151,47 @@ impl EvalWorker {
 
         tracing::info!(
             eval_event_id = %entry.eval_event_id,
+            operation_type = event.operation_type.as_str(),
             faithfulness = faithfulness,
             below_threshold = result.below_threshold,
             model_config = %event.model_config,
-            question = %event.question,
+            "eval.result"
+        );
+
+        self.outbox_repository
+            .mark_done(entry.id)
+            .await
+            .map_err(|e| EvalWorkerError::Outbox(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn score_ingestion(
+        &self,
+        entry: &EvalOutboxEntry,
+        event: &crate::domain::EvalEvent,
+    ) -> Result<(), EvalWorkerError> {
+        let chunk_count: usize = event.generated_answer.parse().unwrap_or(0);
+        let faithfulness = if chunk_count > 0 { 1.0_f32 } else { 0.0_f32 };
+
+        let result = EvalResult::new(
+            entry.eval_event_id,
+            faithfulness,
+            None,
+            None,
+            self.faithfulness_threshold,
+        );
+
+        self.result_repository
+            .save(&result)
+            .await
+            .map_err(|e| EvalWorkerError::ResultRepository(e.to_string()))?;
+
+        tracing::info!(
+            eval_event_id = %entry.eval_event_id,
+            operation_type = event.operation_type.as_str(),
+            chunk_count = chunk_count,
+            non_empty = chunk_count > 0,
             "eval.result"
         );
 

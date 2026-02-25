@@ -6,18 +6,25 @@ use config::Environment as EnvironmentSource;
 use config::{Config, File};
 use tokio::net::TcpListener;
 
+use sandakan::application::ports::McpClientPort;
+use sandakan::application::ports::RagSourceCollector;
+use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
 };
 use sandakan::application::services::{
-    EvalWorker, IngestionService, IngestionWorker, RetrievalService,
+    AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
+    IngestionWorker, RetrievalService,
 };
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
     FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
 };
 use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
+use sandakan::infrastructure::mcp::{
+    CompositeMcpClient, SseMcpClient, StandardMcpAdapter, StdioMcpClient, ToolHandler,
+};
 use sandakan::infrastructure::observability::{TracingConfig, init_tracing};
 use sandakan::infrastructure::persistence::{
     PgConversationRepository, PgEvalEventRepository, PgEvalOutboxRepository,
@@ -27,8 +34,13 @@ use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
     CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
 };
+use sandakan::infrastructure::tools::{
+    InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
+    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
+};
 use sandakan::presentation::{
-    AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
+    AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
+    TranscriptionProviderSetting, create_router,
 };
 
 const INGESTION_CHANNEL_CAPACITY: usize = 64;
@@ -202,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
     let (ingestion_sender, ingestion_receiver) =
         tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
 
-    let worker = IngestionWorker::new(
+    let ingestion_worker = IngestionWorker::new(
         ingestion_receiver,
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
@@ -212,11 +224,6 @@ async fn main() -> anyhow::Result<()> {
         transcription_engine,
         Arc::clone(&staging_store),
     );
-
-    tokio::spawn(async move {
-        worker.run().await;
-    });
-    tracing::info!("Ingestion worker spawned");
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
@@ -245,39 +252,213 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&conversation_repository),
         eval_event_repo.clone(),
         eval_outbox_repo.clone(),
-        model_config,
+        model_config.clone(),
         settings.rag.top_k,
         settings.rag.similarity_threshold,
         settings.rag.max_context_tokens,
         settings.rag.fallback_message.clone(),
     ));
 
-    if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
-        let result_repo: Arc<dyn EvalResultRepository> =
-            Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
+    let agent_eval_event_repo = eval_event_repo.clone();
+    let agent_eval_outbox_repo = eval_outbox_repo.clone();
 
-        let eval_worker = EvalWorker::new(
-            outbox_repo,
-            event_repo,
-            result_repo,
-            Arc::clone(&embedder),
+    let ingestion_worker =
+        if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
+            let result_repo: Arc<dyn EvalResultRepository> =
+                Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
+
+            let eval_worker = EvalWorker::new(
+                outbox_repo.clone(),
+                event_repo.clone(),
+                result_repo,
+                Arc::clone(&embedder),
+                llm_client.clone() as Arc<dyn LlmClient>,
+                settings.eval.faithfulness_threshold,
+                settings.eval.correctness_threshold,
+                std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
+                settings.eval.worker_batch_size,
+            );
+            tokio::spawn(async move {
+                eval_worker.run().await;
+            });
+            tracing::info!(
+                poll_interval_secs = settings.eval.worker_poll_interval_secs,
+                batch_size = settings.eval.worker_batch_size,
+                "EvalWorker spawned"
+            );
+
+            ingestion_worker.with_eval(event_repo, outbox_repo, &model_config)
+        } else {
+            tracing::info!("Eval feature disabled");
+            ingestion_worker
+        };
+
+    tokio::spawn(async move {
+        ingestion_worker.run().await;
+    });
+    tracing::info!("Ingestion worker spawned");
+
+    let agent_service: Option<Arc<dyn AgentServicePort>> = if settings.agent.enabled {
+        let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();
+        let mut schemas = Vec::new();
+
+        if let Some(ws_config) = &settings.agent.web_search {
+            let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
+                api_key: ws_config.api_key.clone(),
+                endpoint: ws_config.endpoint.clone(),
+                max_results: ws_config.max_results,
+            }));
+            schemas.push(WebSearchAdapter::tool_schema());
+            handlers.push(adapter as Arc<dyn ToolHandler>);
+        }
+
+        let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
+            if settings.agent.rag_search_enabled && settings.eval.enabled {
+                Some(Arc::new(InMemoryRagSourceCollector::new()))
+            } else {
+                None
+            };
+
+        if settings.agent.rag_search_enabled {
+            let rag = Arc::new(RagSearchAdapter::new(
+                Arc::clone(&retrieval_service) as Arc<dyn RetrievalServicePort>,
+                rag_source_collector.clone(),
+            ));
+            schemas.push(RagSearchAdapter::tool_schema());
+            handlers.push(rag as Arc<dyn ToolHandler>);
+            tracing::info!("RAG search tool registered");
+        }
+
+        if let Some(notif) = &settings.agent.notification {
+            let format = match notif.format {
+                NotificationFormatSetting::Plain => NotificationFormat::Plain,
+                NotificationFormatSetting::Slack => NotificationFormat::Slack,
+            };
+            let adapter = Arc::new(NotificationAdapter::new(NotificationConfig {
+                webhook_url: notif.webhook_url.clone(),
+                format,
+                timeout_secs: notif.timeout_secs,
+            })?);
+            schemas.push(NotificationAdapter::tool_schema());
+            handlers.push(adapter as Arc<dyn ToolHandler>);
+            tracing::info!(
+                webhook_url = %notif.webhook_url,
+                "Notification webhook tool registered"
+            );
+        }
+
+        if let Some(fs_cfg) = &settings.agent.fs_tools {
+            match build_fs_tools(
+                &fs_cfg.root_path,
+                fs_cfg.max_read_bytes,
+                fs_cfg.max_dir_entries,
+            ) {
+                Ok((list_tool, read_tool)) => {
+                    schemas.push(sandakan::infrastructure::tools::ListDirectoryTool::tool_schema());
+                    schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
+                    handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
+                    handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
+                    tracing::info!(
+                        root_path = %fs_cfg.root_path,
+                        "Filesystem introspection tools registered (list_directory, read_file)"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to initialize fs_tools — tools not registered");
+                }
+            }
+        }
+
+        // Build a composite MCP client: one entry per configured wire server.
+        // Each wire client is wrapped in a `WireMcpRouter` that tries it before
+        // falling back to `StandardMcpAdapter` (for compiled-in handlers).
+        let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
+
+        for server_cfg in &settings.agent.mcp_servers {
+            match server_cfg {
+                McpServerConfig::Stdio(cfg) => {
+                    tracing::info!(
+                        name = %cfg.name,
+                        command = %cfg.command,
+                        "Connecting to stdio MCP server"
+                    );
+                    match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
+                        Ok(client) => {
+                            schemas.extend(client.tool_schemas.clone());
+                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                        }
+                        Err(e) => {
+                            tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
+                        }
+                    }
+                }
+                McpServerConfig::Sse(cfg) => {
+                    tracing::info!(
+                        name = %cfg.name,
+                        endpoint = %cfg.endpoint,
+                        "Connecting to SSE MCP server"
+                    );
+                    match SseMcpClient::new(&cfg.endpoint).await {
+                        Ok(client) => {
+                            schemas.extend(client.tool_schemas.clone());
+                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                        }
+                        Err(e) => {
+                            tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
+                        }
+                    }
+                }
+            }
+        }
+
+        let mcp_client: Arc<dyn McpClientPort> = if wire_clients.is_empty() {
+            Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
+        } else {
+            Arc::new(CompositeMcpClient::new(
+                wire_clients,
+                StandardMcpAdapter::new(handlers),
+            )) as Arc<dyn McpClientPort>
+        };
+
+        let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
+        let agent_model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
+
+        let agent_config = AgentServiceConfig {
+            model_config: agent_model_config,
+            max_iterations: settings.agent.max_iterations,
+            tool_timeout_secs: settings.agent.tool_timeout_secs,
+            tool_fail_fast: settings.agent.tool_fail_fast,
+            system_prompt: settings.agent.system_prompt.clone(),
+            reflection: sandakan::application::services::ReflectionSettings {
+                enabled: settings.agent.reflection.enabled,
+                score_threshold: settings.agent.reflection.score_threshold,
+                correction_budget: settings.agent.reflection.correction_budget,
+                critic_system_prompt: settings.agent.reflection.critic_system_prompt.clone(),
+            },
+        };
+
+        let svc = Arc::new(AgentService::new(
             llm_client.clone() as Arc<dyn LlmClient>,
-            settings.eval.faithfulness_threshold,
-            settings.eval.correctness_threshold,
-            std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
-            settings.eval.worker_batch_size,
-        );
-        tokio::spawn(async move {
-            eval_worker.run().await;
-        });
+            mcp_client,
+            tool_registry,
+            Arc::clone(&conversation_repository),
+            agent_eval_event_repo,
+            agent_eval_outbox_repo,
+            rag_source_collector,
+            agent_config,
+        ));
+
         tracing::info!(
-            poll_interval_secs = settings.eval.worker_poll_interval_secs,
-            batch_size = settings.eval.worker_batch_size,
-            "EvalWorker spawned"
+            max_iterations = settings.agent.max_iterations,
+            tool_timeout_secs = settings.agent.tool_timeout_secs,
+            tool_fail_fast = settings.agent.tool_fail_fast,
+            "AgentService initialized"
         );
+        Some(svc as Arc<dyn AgentServicePort>)
     } else {
-        tracing::info!("Eval feature disabled");
-    }
+        tracing::info!("Agent feature disabled");
+        None
+    };
 
     let state = AppState {
         ingestion_service,
@@ -286,6 +467,7 @@ async fn main() -> anyhow::Result<()> {
         job_repository,
         ingestion_sender,
         staging_store,
+        agent_service,
         settings: settings.clone(),
     };
 

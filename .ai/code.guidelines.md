@@ -9,6 +9,7 @@ To conserve context window and ensure deterministic navigation, this repository 
 * **MANDATORY END-OF-TASK ACTION:** Whenever you implement a feature, extract a module, or modify a domain capability, **you MUST update the `/// @AI:` block in the relevant `mod.rs` file.** Never finish a task without syncing the routing map.
 * **The `wc -l` Gateway:** Large files destroy LLM attention. Before reading any implementation file, you MUST run `wc -l <filepath>`.
 * **The 250-Line Rule & The Bypass:** If a file exceeds 250 lines, it generally violates SRP.
+
 1. **Exception:** If the file begins with the `// @AI-BYPASS-LENGTH` header, **ignore the 250-line limit** and proceed normally. (Reserve this for complex configurations or un-splittable match blocks).
 2. **If no bypass exists, DO NOT** read the full file.
 3. Map symbols using `grep -E '^(pub )?(struct|enum|fn|impl|trait)' <filepath>`.
@@ -20,14 +21,23 @@ To conserve context window and ensure deterministic navigation, this repository 
 * **Strict Isolation:** Define DTOs, Requests, and Responses in a dedicated `schema.rs` or `contract` crate. Never define them inside handler files.
 * **Trait Boundaries:** Decouple handlers from infrastructure using traits defined in `core` crates. Implement them in `infrastructure`. Prefer static dispatch (`T: Trait`) over dynamic (`&dyn Trait`) to enable fast AI mocking without reading DB implementations.
 
-## 3. Naming Conventions & Type System
+## 3. Naming Conventions, Type System & Commenting Strategy
 
-Code conveys intent via signatures and types. Use `//` comments ONLY to explain *why* (complex business rules), never *what*.
+Code conveys intent via signatures and types, but context often requires plain English. We do not ban comments; instead, we strictly categorize them by their purpose.
 
-* **Casing:** `PascalCase` (Types), `snake_case` (Functions/Variables), `SCREAMING_SNAKE_CASE` (Constants).
-* **Semantics:** Use verb phrases for functions (`calculate_vwap`) and noun phrases for types (`TradeWriter`). Use exact domain spec terms.
-* **Newtype Pattern:** Wrap primitives for domain safety and to avoid stringly-typed APIs (e.g., `struct UserId(u64);`).
-* **State Machines & Typestates:** Use `enum` for explicit state handling. Enforce valid transitions via move semantics and generics (e.g., `ConnectionBuilder<Unvalidated> -> ConnectionBuilder<Validated>`).
+### Commenting Taxonomy & Rules
+
+* **The "Why", Not the "What" (`//`):** Inline comments are strictly reserved for explaining business constraints, domain edge-cases, or acknowledging a hack/workaround due to an upstream bug. Never translate Rust syntax into English. If you need a comment to explain what a block of code is doing, the code must be refactored or extracted into a well-named function.
+* **Documentation Comments (`///`, `//!`):** Use these to define the contract of public APIs, structs, and traits. As stated in Section 1, module-level documentation (`/// @AI:`) is strictly mandatory for domain routing.
+* **Mandatory Pragmatic Comments (`// SAFETY:`, `// @AI-BYPASS-LENGTH:`, `// TODO:`):** Strictly required above `unsafe` blocks to explain invariants, required to bypass the 250-line limit, and acceptable for tracking technical debt (provided they include context and a ticket number).
+* **Zero-Tolerance Anti-Patterns:** Do not leave commented-out code (delete it; Git preserves history) and do not write redundant variable explanations (let the type system do the talking).
+
+### Naming & Type System
+
+* **Casing:** Use `PascalCase` for Types, `snake_case` for Functions/Variables, and `SCREAMING_SNAKE_CASE` for Constants.
+* **Semantics:** Use verb phrases for functions (e.g., `calculate_vwap`) and noun phrases for types (e.g., `TradeWriter`). Strictly use exact terminology from the domain specification.
+* **Newtype Pattern:** Wrap primitives to enforce domain safety and prevent "stringly-typed" or "primitive-obsessed" APIs (e.g., `struct UserId(u64);`, `struct EmailAddress(String);`).
+* **State Machines & Typestates:** Use `enum` for explicit state handling. Enforce valid state transitions at compile-time via move semantics and generics (e.g., a function that takes `ConnectionBuilder<Unvalidated>` and returns `ConnectionBuilder<Validated>`).
 
 ## 4. Async & Concurrency
 

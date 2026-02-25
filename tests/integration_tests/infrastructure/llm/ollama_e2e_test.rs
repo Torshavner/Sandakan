@@ -125,6 +125,7 @@ fn test_settings() -> Settings {
             fallback_message: "I cannot answer this.".to_string(),
         },
         eval: sandakan::presentation::config::EvalSettings::default(),
+        agent: sandakan::presentation::config::AgentSettings::default(),
     }
 }
 
@@ -172,6 +173,7 @@ fn create_ollama_test_app() -> axum::Router {
         job_repository: Arc::new(MockJobRepository),
         ingestion_sender,
         staging_store: Arc::new(MockStagingStore),
+        agent_service: None,
         settings: test_settings(),
     };
 
