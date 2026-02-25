@@ -1,5 +1,13 @@
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMode {
+    #[default]
+    Rag,
+    Agent,
+}
+
 // ─── MCP transports ───────────────────────────────────────────────────────────
 
 /// Discriminated union over the two MCP wire transports.
@@ -173,6 +181,10 @@ pub struct AgentSettings {
     pub fs_tools: Option<FsToolSettings>,
     #[serde(default)]
     pub reflection: ReflectionSettings,
+    /// Which backend handles `/v1/chat/completions` by default.
+    /// Overridable per-request via `"model": "agent-pipeline"`.
+    #[serde(default)]
+    pub chat_mode: ChatMode,
 }
 
 fn default_agent_system_prompt() -> String {
@@ -201,6 +213,7 @@ impl Default for AgentSettings {
             mcp_servers: Vec::new(),
             fs_tools: None,
             reflection: ReflectionSettings::default(),
+            chat_mode: ChatMode::default(),
         }
     }
 }

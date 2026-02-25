@@ -46,8 +46,8 @@ where
             "/api/v1/jobs/{job_id}",
             get(job_status_handler::<F, L, V, T>),
         )
-        .route("/v1/models", get(models_handler))
-        .route("/api/models", get(models_handler));
+        .route("/v1/models", get(models_handler::<F, L, V, T>))
+        .route("/api/models", get(models_handler::<F, L, V, T>));
 
     router = router
         .route(

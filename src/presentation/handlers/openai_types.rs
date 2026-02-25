@@ -84,15 +84,24 @@ impl ChatCompletionResponse {
 }
 
 impl ModelsResponse {
-    pub fn with_rag_model() -> Self {
-        Self {
-            object: "list",
-            data: vec![ModelInfo {
-                id: "rag-pipeline".to_string(),
+    pub fn with_models(agent_enabled: bool) -> Self {
+        let mut data = vec![ModelInfo {
+            id: "rag-pipeline".to_string(),
+            object: "model",
+            created: 1700000000,
+            owned_by: "local".to_string(),
+        }];
+        if agent_enabled {
+            data.push(ModelInfo {
+                id: "agent-pipeline".to_string(),
                 object: "model",
                 created: 1700000000,
                 owned_by: "local".to_string(),
-            }],
+            });
+        }
+        Self {
+            object: "list",
+            data,
         }
     }
 }

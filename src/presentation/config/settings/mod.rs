@@ -12,7 +12,7 @@ mod server;
 mod storage;
 
 pub use agent::{
-    AgentSettings, FsToolSettings, McpServerConfig, NotificationFormatSetting,
+    AgentSettings, ChatMode, FsToolSettings, McpServerConfig, NotificationFormatSetting,
     NotificationSettings, ReflectionSettings, SseMcpServerConfig, StdioMcpServerConfig,
     WebSearchSettings,
 };
@@ -21,7 +21,7 @@ pub use database::DatabaseSettings;
 pub use embeddings::{EmbeddingProvider, EmbeddingsSettings};
 pub use eval::EvalSettings;
 pub use extraction::{
-    AudioExtractionSettings, ExtractorProvider, ExtractionSettings, PdfExtractionSettings,
+    AudioExtractionSettings, ExtractionSettings, ExtractorProvider, PdfExtractionSettings,
     TranscriptionProviderSetting, VideoExtractionSettings,
 };
 pub use llm::LlmSettings;
