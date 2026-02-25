@@ -29,10 +29,16 @@ pub struct SourceChunk {
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Source URL, with an appended `?t=Xs` / `&t=Xs` timestamp when the chunk is from
+    /// a media file, enabling clickable deep-link citations (e.g. `youtube.com/watch?v=XYZ&t=1045s`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    /// Start time of the chunk within the media file in seconds.
+    /// Present only for audio/video sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -65,17 +71,31 @@ where
         .await
     {
         Ok(response) => {
-            tracing::info!(sources_count = response.sources.len(), "Query successful");
+            let citation_metadata_size = response
+                .sources
+                .iter()
+                .filter(|s| s.start_time.is_some())
+                .count();
+            tracing::info!(
+                sources_count = response.sources.len(),
+                citation_metadata_size,
+                "Query successful"
+            );
             let sources = response
                 .sources
                 .into_iter()
-                .map(|s| SourceChunk {
-                    text: s.text,
-                    page: s.page,
-                    score: s.score,
-                    title: s.title,
-                    source_url: s.source_url,
-                    content_type: s.content_type,
+                .map(|s| {
+                    let timestamped = s.timestamped_url();
+                    let start_time = s.start_time;
+                    SourceChunk {
+                        text: s.text,
+                        page: s.page,
+                        score: s.score,
+                        title: s.title,
+                        source_url: timestamped,
+                        content_type: s.content_type,
+                        start_time,
+                    }
                 })
                 .collect();
 

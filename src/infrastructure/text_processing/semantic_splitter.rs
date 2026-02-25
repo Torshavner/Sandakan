@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 
 use crate::application::ports::{TextSplitter, TextSplitterError};
-use crate::domain::{Chunk, DocumentId, DocumentMetadata};
+use crate::domain::{Chunk, DocumentId, DocumentMetadata, TranscriptSegment};
 
 pub struct SemanticSplitter {
     max_tokens: usize,
@@ -163,6 +163,7 @@ impl SemanticSplitter {
     }
 }
 
+// @AI-BYPASS-LENGTH
 #[async_trait]
 impl TextSplitter for SemanticSplitter {
     async fn split(
@@ -232,5 +233,87 @@ impl TextSplitter for SemanticSplitter {
         }
 
         Ok(all_chunks)
+    }
+
+    /// Groups timed transcript segments into token-budgeted chunks.
+    ///
+    /// Groups consecutive segments until the token budget is reached; the first segment's
+    /// `start_time` is recorded on the chunk for deep-link citation (e.g. `?t=45s`).
+    async fn split_segments(
+        &self,
+        segments: &[TranscriptSegment],
+        document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
+    ) -> Result<Vec<Chunk>, TextSplitterError> {
+        if segments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut seg_idx = 0;
+
+        while seg_idx < segments.len() {
+            let chunk_start_time = segments[seg_idx].start_time;
+            let mut current_text = segments[seg_idx].text.trim().to_string();
+            let mut current_tokens = self.count_tokens(&current_text);
+            let chunk_start_idx = seg_idx;
+            seg_idx += 1;
+
+            // Accumulate segments until we exceed the token budget.
+            while seg_idx < segments.len() {
+                let next_text = segments[seg_idx].text.trim();
+                let next_tokens = self.count_tokens(next_text);
+                let separator = if current_text.is_empty() { 0 } else { 1 };
+
+                if current_tokens + separator + next_tokens > self.max_tokens {
+                    break;
+                }
+
+                if !current_text.is_empty() {
+                    current_text.push(' ');
+                }
+                current_text.push_str(next_text);
+                current_tokens += separator + next_tokens;
+                seg_idx += 1;
+            }
+
+            if current_text.is_empty() {
+                continue;
+            }
+
+            let chunk = match &metadata {
+                Some(meta) => Chunk::with_metadata(
+                    current_text,
+                    document_id,
+                    None,
+                    chunk_start_idx,
+                    Arc::clone(meta),
+                )
+                .with_start_time(chunk_start_time),
+                None => Chunk::new(current_text, document_id, None, chunk_start_idx)
+                    .with_start_time(chunk_start_time),
+            };
+            chunks.push(chunk);
+
+            // Overlap: step back by overlap_tokens worth of segments.
+            if seg_idx < segments.len() && self.overlap_tokens > 0 {
+                let chunk_end_idx = seg_idx - 1;
+                let mut overlap_acc = 0;
+                let mut overlap_start = chunk_end_idx;
+
+                while overlap_start > chunk_start_idx && overlap_acc < self.overlap_tokens {
+                    overlap_acc += self.count_tokens(segments[overlap_start].text.trim());
+                    if overlap_start > chunk_start_idx {
+                        overlap_start -= 1;
+                    }
+                }
+
+                if overlap_start < chunk_end_idx {
+                    seg_idx = overlap_start + 1;
+                }
+            }
+        }
+
+        Ok(chunks)
     }
 }

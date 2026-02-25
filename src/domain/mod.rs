@@ -27,6 +27,8 @@
 //! - storage_path   -> StoragePath value object for staging store file references.
 //! - tool_call      -> ToolCallId (String newtype), ToolName (String newtype),
 //!   ToolCall (id + name + arguments: Value), ToolResult (tool_call_id + tool_name + content).
+//! - transcript_segment -> TranscriptSegment (text, start_time, end_time in seconds).
+//!   merge_text() joins segments into a plain string.
 
 mod chunk;
 mod conversation;
@@ -46,6 +48,7 @@ mod message_id;
 mod message_role;
 mod storage_path;
 mod tool_call;
+mod transcript_segment;
 
 pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
@@ -65,3 +68,4 @@ pub use message_id::MessageId;
 pub use message_role::MessageRole;
 pub use storage_path::StoragePath;
 pub use tool_call::{ToolCall, ToolCallId, ToolName, ToolResult};
+pub use transcript_segment::TranscriptSegment;

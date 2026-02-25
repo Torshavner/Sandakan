@@ -187,44 +187,52 @@ where
             .await
             .map_err(IngestionWorkerError::Staging)?;
 
-        let text = match content_type {
-            ContentType::Audio | ContentType::Video => {
-                self.update_status(job_id, JobStatus::MediaExtraction, None)
-                    .await?;
-                tracing::debug!(
-                    content_type = ?content_type,
-                    "Starting media extraction"
-                );
-
-                self.update_status(job_id, JobStatus::Transcribing, None)
-                    .await?;
-                tracing::debug!("Starting audio transcription");
-
-                self.transcription_engine
-                    .transcribe(&data)
-                    .await
-                    .map_err(IngestionWorkerError::Transcription)?
-            }
-            _ => {
-                self.update_status(job_id, JobStatus::Processing, None)
-                    .await?;
-                self.file_loader
-                    .extract_text(&data, document)
-                    .await
-                    .map_err(IngestionWorkerError::FileLoading)?
-            }
-        };
-
         self.update_status(job_id, JobStatus::Embedding, None)
             .await?;
 
         let metadata = Arc::new(DocumentMetadata::from_document(document, None));
 
-        let chunks = self
-            .text_splitter
-            .split(&text, doc_id, Some(Arc::clone(&metadata)))
-            .await
-            .map_err(IngestionWorkerError::Splitting)?;
+        let chunks = match content_type {
+            ContentType::Audio | ContentType::Video => {
+                self.update_status(job_id, JobStatus::MediaExtraction, None)
+                    .await?;
+                tracing::debug!(content_type = ?content_type, "Starting media extraction");
+
+                self.update_status(job_id, JobStatus::Transcribing, None)
+                    .await?;
+                tracing::debug!("Starting audio transcription");
+
+                let segments = self
+                    .transcription_engine
+                    .transcribe(&data)
+                    .await
+                    .map_err(IngestionWorkerError::Transcription)?;
+
+                tracing::info!(
+                    segment_count = segments.len(),
+                    "Transcription produced segments"
+                );
+
+                self.text_splitter
+                    .split_segments(&segments, doc_id, Some(Arc::clone(&metadata)))
+                    .await
+                    .map_err(IngestionWorkerError::Splitting)?
+            }
+            _ => {
+                self.update_status(job_id, JobStatus::Processing, None)
+                    .await?;
+                let text = self
+                    .file_loader
+                    .extract_text(&data, document)
+                    .await
+                    .map_err(IngestionWorkerError::FileLoading)?;
+
+                self.text_splitter
+                    .split(&text, doc_id, Some(Arc::clone(&metadata)))
+                    .await
+                    .map_err(IngestionWorkerError::Splitting)?
+            }
+        };
 
         if chunks.is_empty() {
             return Ok(0);

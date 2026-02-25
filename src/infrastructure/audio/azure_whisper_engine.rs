@@ -3,6 +3,7 @@ use reqwest::multipart;
 use serde::Deserialize;
 
 use crate::application::ports::{TranscriptionEngine, TranscriptionError};
+use crate::domain::TranscriptSegment;
 
 pub struct AzureWhisperEngine {
     client: reqwest::Client,
@@ -27,19 +28,31 @@ impl AzureWhisperEngine {
 }
 
 #[derive(Deserialize)]
-struct AzureTranscriptionResponse {
+struct AzureWhisperSegment {
+    start: f32,
+    end: f32,
     text: String,
+}
+
+#[derive(Deserialize)]
+struct AzureVerboseResponse {
+    segments: Vec<AzureWhisperSegment>,
 }
 
 #[async_trait]
 impl TranscriptionEngine for AzureWhisperEngine {
-    async fn transcribe(&self, audio_data: &[u8]) -> Result<String, TranscriptionError> {
+    async fn transcribe(
+        &self,
+        audio_data: &[u8],
+    ) -> Result<Vec<TranscriptSegment>, TranscriptionError> {
         let file_part = multipart::Part::bytes(audio_data.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|e| TranscriptionError::ApiRequestFailed(format!("mime: {}", e)))?;
 
-        let form = multipart::Form::new().part("file", file_part);
+        let form = multipart::Form::new()
+            .text("response_format", "verbose_json")
+            .part("file", file_part);
 
         tracing::debug!(endpoint = %self.endpoint, "Sending audio to Azure OpenAI Whisper");
 
@@ -64,16 +77,22 @@ impl TranscriptionEngine for AzureWhisperEngine {
             )));
         }
 
-        let result: AzureTranscriptionResponse = response
+        let result: AzureVerboseResponse = response
             .json()
             .await
             .map_err(|e| TranscriptionError::ApiRequestFailed(format!("parse response: {}", e)))?;
 
+        let segments: Vec<TranscriptSegment> = result
+            .segments
+            .into_iter()
+            .map(|s| TranscriptSegment::new(s.text.trim().to_string(), s.start, s.end))
+            .collect();
+
         tracing::info!(
-            chars = result.text.len(),
+            segment_count = segments.len(),
             "Azure OpenAI Whisper transcription completed"
         );
 
-        Ok(result.text.trim().to_string())
+        Ok(segments)
     }
 }

@@ -164,6 +164,7 @@ where
                     .metadata
                     .as_ref()
                     .map(|m| m.content_type.as_mime().to_string()),
+                start_time: r.chunk.start_time,
             })
             .collect();
 
@@ -297,6 +298,7 @@ where
                     .metadata
                     .as_ref()
                     .map(|m| m.content_type.as_mime().to_string()),
+                start_time: r.chunk.start_time,
             })
             .collect();
 
@@ -360,6 +362,7 @@ where
                     .metadata
                     .as_ref()
                     .map(|m| m.content_type.as_mime().to_string()),
+                start_time: r.chunk.start_time,
             })
             .collect();
 

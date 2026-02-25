@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use reqwest::multipart;
+use serde::Deserialize;
 
 use crate::application::ports::{TranscriptionEngine, TranscriptionError};
+use crate::domain::TranscriptSegment;
 
 pub struct OpenAiWhisperEngine {
     client: reqwest::Client,
@@ -21,9 +23,24 @@ impl OpenAiWhisperEngine {
     }
 }
 
+#[derive(Deserialize)]
+struct WhisperSegment {
+    start: f32,
+    end: f32,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct VerboseJsonResponse {
+    segments: Vec<WhisperSegment>,
+}
+
 #[async_trait]
 impl TranscriptionEngine for OpenAiWhisperEngine {
-    async fn transcribe(&self, audio_data: &[u8]) -> Result<String, TranscriptionError> {
+    async fn transcribe(
+        &self,
+        audio_data: &[u8],
+    ) -> Result<Vec<TranscriptSegment>, TranscriptionError> {
         let url = format!("{}/audio/transcriptions", self.base_url);
 
         let file_part = multipart::Part::bytes(audio_data.to_vec())
@@ -33,7 +50,7 @@ impl TranscriptionEngine for OpenAiWhisperEngine {
 
         let form = multipart::Form::new()
             .text("model", self.model.clone())
-            .text("response_format", "text")
+            .text("response_format", "verbose_json")
             .part("file", file_part);
 
         tracing::debug!(model = %self.model, "Sending audio to OpenAI Whisper API");
@@ -59,16 +76,22 @@ impl TranscriptionEngine for OpenAiWhisperEngine {
             )));
         }
 
-        let transcript = response
-            .text()
+        let result: VerboseJsonResponse = response
+            .json()
             .await
-            .map_err(|e| TranscriptionError::ApiRequestFailed(format!("body: {}", e)))?;
+            .map_err(|e| TranscriptionError::ApiRequestFailed(format!("parse response: {}", e)))?;
+
+        let segments: Vec<TranscriptSegment> = result
+            .segments
+            .into_iter()
+            .map(|s| TranscriptSegment::new(s.text.trim().to_string(), s.start, s.end))
+            .collect();
 
         tracing::info!(
-            chars = transcript.len(),
+            segment_count = segments.len(),
             "OpenAI Whisper transcription completed"
         );
 
-        Ok(transcript.trim().to_string())
+        Ok(segments)
     }
 }

@@ -12,6 +12,9 @@ pub struct Chunk {
     pub page: Option<u32>,
     pub offset: usize,
     pub metadata: Option<Arc<DocumentMetadata>>,
+    /// Start time in seconds of the first transcript segment that contributed to this chunk.
+    /// `None` for non-media sources (PDF, plain text).
+    pub start_time: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,6 +73,7 @@ impl Chunk {
             page,
             offset,
             metadata: None,
+            start_time: None,
         }
     }
 
@@ -88,23 +92,31 @@ impl Chunk {
             page,
             offset,
             metadata: Some(metadata),
+            start_time: None,
         }
+    }
+
+    /// Builder-style method to attach a media timestamp (seconds from the start of the file).
+    pub fn with_start_time(mut self, start_time: f32) -> Self {
+        self.start_time = Some(start_time);
+        self
     }
 
     /// Returns an embedding-ready string that includes document context when available.
     ///
-    /// Enriching embeddings with title and page guides the model toward semantically
+    /// Enriching embeddings with title and page/time guides the model toward semantically
     /// distinct vectors for identical text from different documents.
     pub fn as_contextual_string(&self) -> String {
         match &self.metadata {
             Some(meta) => {
-                let page_label = self
-                    .page
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "N/A".to_string());
+                let location_label = match (self.page, self.start_time) {
+                    (_, Some(t)) => format!("{:.1}s", t),
+                    (Some(p), None) => p.to_string(),
+                    (None, None) => "N/A".to_string(),
+                };
                 format!(
                     "Title: {}\nPage: {}\nContent: {}",
-                    meta.title, page_label, self.text
+                    meta.title, location_label, self.text
                 )
             }
             None => self.text.clone(),

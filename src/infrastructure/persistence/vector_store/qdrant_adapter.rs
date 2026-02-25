@@ -204,6 +204,16 @@ impl VectorStore for QdrantAdapter {
                     }
                 }
 
+                if let Some(start_time) = chunk.start_time {
+                    payload.insert(
+                        "start_time".to_string(),
+                        serde_json::Value::Number(
+                            serde_json::Number::from_f64(start_time as f64)
+                                .unwrap_or(serde_json::Number::from(0)),
+                        ),
+                    );
+                }
+
                 PointStruct::new(
                     PointId::from(chunk.id.as_uuid().to_string()),
                     embedding.values.clone(),
@@ -281,6 +291,11 @@ impl VectorStore for QdrantAdapter {
                     })
                 });
 
+                let start_time = payload
+                    .get("start_time")
+                    .and_then(|v| v.as_double())
+                    .map(|v| v as f32);
+
                 let chunk = Chunk {
                     id: ChunkId::from_uuid(chunk_id),
                     text,
@@ -288,6 +303,7 @@ impl VectorStore for QdrantAdapter {
                     page,
                     offset,
                     metadata,
+                    start_time,
                 };
 
                 Some(SearchResult {

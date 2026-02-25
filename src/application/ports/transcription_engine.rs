@@ -1,8 +1,17 @@
 use async_trait::async_trait;
 
+use crate::domain::TranscriptSegment;
+
 #[async_trait]
 pub trait TranscriptionEngine: Send + Sync {
-    async fn transcribe(&self, audio_data: &[u8]) -> Result<String, TranscriptionError>;
+    /// Transcribes raw audio/video bytes into a sequence of timed segments.
+    ///
+    /// Each segment carries its own `start_time` and `end_time` (in seconds), enabling
+    /// the ingestion pipeline to attach timestamps to retrieved chunks for deep-link citations.
+    async fn transcribe(
+        &self,
+        audio_data: &[u8],
+    ) -> Result<Vec<TranscriptSegment>, TranscriptionError>;
 }
 
 #[derive(Debug, thiserror::Error)]

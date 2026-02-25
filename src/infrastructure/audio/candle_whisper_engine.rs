@@ -10,6 +10,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
 use crate::application::ports::{AudioDecoder, TranscriptionEngine, TranscriptionError};
+use crate::domain::TranscriptSegment;
 
 pub struct CandleWhisperEngine {
     model: Mutex<m::model::Whisper>,
@@ -93,16 +94,20 @@ impl CandleWhisperEngine {
 
 #[async_trait]
 impl TranscriptionEngine for CandleWhisperEngine {
-    async fn transcribe(&self, audio_data: &[u8]) -> Result<String, TranscriptionError> {
+    async fn transcribe(
+        &self,
+        audio_data: &[u8],
+    ) -> Result<Vec<TranscriptSegment>, TranscriptionError> {
         let pcm = self
             .decoder
             .decode(audio_data)
             .map_err(|e| TranscriptionError::DecodingFailed(e.to_string()))?;
 
+        // Whisper operates on 30-second windows at 16kHz.
+        const SAMPLE_RATE: f32 = 16_000.0;
         let chunk_samples = m::N_SAMPLES;
-        let mut segments: Vec<String> = Vec::new();
 
-        let mut mel_tensors = Vec::new();
+        let mut pending: Vec<(usize, Tensor)> = Vec::new();
 
         for (i, chunk) in pcm.chunks(chunk_samples).enumerate() {
             let samples = if chunk.len() < chunk_samples {
@@ -134,30 +139,30 @@ impl TranscriptionEngine for CandleWhisperEngine {
                     TranscriptionError::TranscriptionFailed(format!("mel tensor cast: {}", e))
                 })?;
 
-            mel_tensors.push((i, mel_tensor));
+            pending.push((i, mel_tensor));
         }
 
         let mut model = self.model.lock().await;
+        let mut segments: Vec<TranscriptSegment> = Vec::new();
 
-        for (i, mel_tensor) in mel_tensors {
+        for (i, mel_tensor) in pending {
             let text = decode_segment(&mut model, &self.tokenizer, &self.device, &mel_tensor)?;
 
             tracing::debug!(segment = i, "Transcribed audio segment");
 
             if !text.is_empty() {
-                segments.push(text);
+                let start_time = (i * chunk_samples) as f32 / SAMPLE_RATE;
+                let end_time = ((i + 1) * chunk_samples) as f32 / SAMPLE_RATE;
+                segments.push(TranscriptSegment::new(text, start_time, end_time));
             }
         }
 
-        let transcript = segments.join(" ");
-
         tracing::info!(
-            segments = segments.len(),
-            chars = transcript.len(),
+            segment_count = segments.len(),
             "Audio transcription completed"
         );
 
-        Ok(transcript)
+        Ok(segments)
     }
 }
 

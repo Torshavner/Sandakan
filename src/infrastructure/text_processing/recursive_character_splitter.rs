@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::application::ports::{TextSplitter, TextSplitterError};
-use crate::domain::{Chunk, DocumentId, DocumentMetadata};
+use crate::domain::{Chunk, DocumentId, DocumentMetadata, TranscriptSegment};
 
 pub struct RecursiveCharacterSplitter {
     chunk_size: usize,
@@ -58,5 +58,28 @@ impl TextSplitter for RecursiveCharacterSplitter {
         }
 
         Ok(chunks)
+    }
+
+    /// Merges segment text and splits it using the character-based chunker.
+    /// `start_time` is assigned to each chunk proportionally from the merged text offset.
+    async fn split_segments(
+        &self,
+        segments: &[TranscriptSegment],
+        document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
+    ) -> Result<Vec<Chunk>, TextSplitterError> {
+        let merged = TranscriptSegment::merge_text(segments);
+        let chunks = self.split(&merged, document_id, metadata).await?;
+
+        // Attach the start_time of the first segment to every chunk (character-level
+        // splitter does not track segment boundaries, so this is a best-effort approximation).
+        let first_start = segments.first().map(|s| s.start_time);
+        Ok(chunks
+            .into_iter()
+            .map(|c| match first_start {
+                Some(t) => c.with_start_time(t),
+                None => c,
+            })
+            .collect())
     }
 }

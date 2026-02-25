@@ -38,8 +38,8 @@ async fn start_mock_azure_server(
 }
 
 #[tokio::test]
-async fn given_valid_audio_bytes_when_azure_transcribes_then_returns_display_text() {
-    let response_body = r#"{"text": "Hello from Azure Whisper"}"#;
+async fn given_valid_audio_bytes_when_azure_transcribes_then_returns_timed_segments() {
+    let response_body = r#"{"segments": [{"id": 0, "start": 0.0, "end": 3.5, "text": "Hello from Azure Whisper"}]}"#;
     let (base_url, shutdown_tx) = start_mock_azure_server(200, response_body).await;
 
     let engine = AzureWhisperEngine::new(&base_url, "my-deployment", "test-key", "2024-02-01");
@@ -48,7 +48,11 @@ async fn given_valid_audio_bytes_when_azure_transcribes_then_returns_display_tex
     let result = engine.transcribe(audio_data).await;
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "Hello from Azure Whisper");
+    let segments = result.unwrap();
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].text, "Hello from Azure Whisper");
+    assert!((segments[0].start_time - 0.0).abs() < f32::EPSILON);
+    assert!((segments[0].end_time - 3.5).abs() < 0.01);
     shutdown_tx.send(()).ok();
 }
 
@@ -70,8 +74,8 @@ async fn given_azure_api_returns_error_status_when_transcribing_then_returns_api
 }
 
 #[tokio::test]
-async fn given_azure_api_returns_empty_text_when_transcribing_then_returns_empty_string() {
-    let response_body = r#"{"text": ""}"#;
+async fn given_azure_api_returns_empty_segments_when_transcribing_then_returns_empty_vec() {
+    let response_body = r#"{"segments": []}"#;
     let (base_url, shutdown_tx) = start_mock_azure_server(200, response_body).await;
 
     let engine = AzureWhisperEngine::new(&base_url, "my-deployment", "test-key", "2024-02-01");
@@ -80,6 +84,29 @@ async fn given_azure_api_returns_empty_text_when_transcribing_then_returns_empty
     let result = engine.transcribe(audio_data).await;
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "");
+    assert!(result.unwrap().is_empty());
+    shutdown_tx.send(()).ok();
+}
+
+#[tokio::test]
+async fn given_multiple_segments_when_azure_transcribes_then_all_segments_carry_accurate_timestamps()
+ {
+    let response_body = r#"{
+        "segments": [
+            {"id": 0, "start": 0.0,  "end": 5.0,  "text": "First segment."},
+            {"id": 1, "start": 5.2,  "end": 10.0, "text": "Second segment."},
+            {"id": 2, "start": 10.5, "end": 15.3, "text": "Third segment."}
+        ]
+    }"#;
+    let (base_url, shutdown_tx) = start_mock_azure_server(200, response_body).await;
+
+    let engine = AzureWhisperEngine::new(&base_url, "my-deployment", "test-key", "2024-02-01");
+
+    let result = engine.transcribe(b"audio").await.unwrap();
+
+    assert_eq!(result.len(), 3);
+    assert!((result[0].start_time - 0.0).abs() < f32::EPSILON);
+    assert!((result[1].start_time - 5.2).abs() < 0.01);
+    assert!((result[2].start_time - 10.5).abs() < 0.01);
     shutdown_tx.send(()).ok();
 }

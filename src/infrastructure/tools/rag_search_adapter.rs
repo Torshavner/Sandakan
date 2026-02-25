@@ -102,14 +102,15 @@ fn format_rag_response(chunks: &[SourceChunk]) -> String {
         .iter()
         .enumerate()
         .map(|(i, chunk)| {
-            let page_label = chunk
-                .page
-                .map(|p| format!("Page {p}"))
-                .unwrap_or_else(|| "Page ?".to_string());
+            let location_label = match (chunk.page, chunk.start_time) {
+                (_, Some(t)) => format!("{:.1}s", t),
+                (Some(p), None) => format!("Page {p}"),
+                (None, None) => "Page ?".to_string(),
+            };
 
             let label = match &chunk.title {
-                Some(title) => format!("{title} - {page_label}"),
-                None => page_label,
+                Some(title) => format!("{title} - {location_label}"),
+                None => location_label,
             };
 
             let text = truncate_utf8(&chunk.text, 800);

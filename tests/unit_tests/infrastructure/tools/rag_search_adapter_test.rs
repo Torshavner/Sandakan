@@ -52,6 +52,7 @@ async fn given_chunks_returned_by_port_when_executing_rag_search_then_formats_nu
             title: None,
             source_url: None,
             content_type: None,
+            start_time: None,
         },
         SourceChunk {
             text: "It focuses on safety and performance.".to_string(),
@@ -60,6 +61,7 @@ async fn given_chunks_returned_by_port_when_executing_rag_search_then_formats_nu
             title: None,
             source_url: None,
             content_type: None,
+            start_time: None,
         },
     ];
     let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
@@ -117,6 +119,7 @@ async fn given_chunk_text_exceeds_800_chars_when_formatting_response_then_text_i
         title: None,
         source_url: None,
         content_type: None,
+        start_time: None,
     }];
     let adapter = RagSearchAdapter::new(Arc::new(StubPortWithChunks { chunks }), None);
 
