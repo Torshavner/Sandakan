@@ -112,6 +112,9 @@ pub struct AgentServiceConfig {
     /// When `true`, any tool error (except `ToolNotFound`) hard-fails the turn.
     /// When `false` (default), errors are surfaced as `[tool_error]` ToolResults.
     pub tool_fail_fast: bool,
+    /// System prompt prepended as the first message on every agent turn.
+    /// Instructs the LLM about its role, available tools, and reasoning approach.
+    pub system_prompt: String,
     pub reflection: ReflectionSettings,
 }
 
@@ -170,7 +173,10 @@ impl AgentService {
             .await
             .map_err(AgentError::from)?;
 
-        let mut messages: Vec<AgentMessage> = history.into_iter().map(AgentMessage::from).collect();
+        let mut messages: Vec<AgentMessage> =
+            std::iter::once(AgentMessage::System(self.config.system_prompt.clone()))
+                .chain(history.into_iter().map(AgentMessage::from))
+                .collect();
         messages.push(AgentMessage::User(user_message));
 
         let tools = self.tool_registry.list_tools();
@@ -428,6 +434,14 @@ impl AgentServicePort for AgentService {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "\
+You are a helpful AI assistant with access to tools. \
+Use tools when they help you answer the user's question more accurately or completely. \
+Reason step-by-step: think about what information you need, call the appropriate tools, \
+observe the results, and synthesise a final answer. \
+When you have enough information to answer, respond directly without calling additional tools. \
+Always cite relevant sources from retrieved content when available.";
 
 const DEFAULT_CRITIC_PROMPT: &str = "\
 You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\

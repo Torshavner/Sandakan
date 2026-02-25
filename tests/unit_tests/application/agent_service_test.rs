@@ -201,6 +201,7 @@ fn default_config() -> AgentServiceConfig {
         max_iterations: 3,
         tool_timeout_secs: 30,
         tool_fail_fast: false,
+        system_prompt: "You are a test agent.".to_string(),
         reflection: ReflectionSettings::default(),
     }
 }
@@ -215,6 +216,7 @@ fn reflection_config(
         max_iterations: 3,
         tool_timeout_secs: 30,
         tool_fail_fast: false,
+        system_prompt: "You are a test agent.".to_string(),
         reflection: ReflectionSettings {
             enabled,
             score_threshold,
@@ -1458,7 +1460,9 @@ impl LlmClient for MockLlmOneThenContent {
         _: &[ToolSchema],
     ) -> Result<LlmToolResponse, LlmClientError> {
         // First call: emit a tool call. Subsequent calls: return content.
-        let already_has_tool_result = messages.iter().any(|m| matches!(m, AgentMessage::ToolResult(_)));
+        let already_has_tool_result = messages
+            .iter()
+            .any(|m| matches!(m, AgentMessage::ToolResult(_)));
         if already_has_tool_result {
             Ok(LlmToolResponse::Content("ok".to_string()))
         } else {
@@ -1472,7 +1476,8 @@ impl LlmClient for MockLlmOneThenContent {
 }
 
 #[tokio::test]
-async fn given_tool_result_with_ascii_content_when_truncating_then_progress_event_emitted_without_panic() {
+async fn given_tool_result_with_ascii_content_when_truncating_then_progress_event_emitted_without_panic()
+ {
     let content = "a".repeat(200);
     let service = build_service(
         Arc::new(MockLlmOneThenContent),
@@ -1497,7 +1502,10 @@ async fn given_tool_result_with_ascii_content_when_truncating_then_progress_even
         .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
         .collect();
 
-    assert!(!tool_result_events.is_empty(), "ToolResult event must be emitted");
+    assert!(
+        !tool_result_events.is_empty(),
+        "ToolResult event must be emitted"
+    );
 }
 
 #[tokio::test]
@@ -1529,9 +1537,15 @@ async fn given_tool_result_with_multibyte_utf8_when_truncating_then_no_panic_and
         .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
         .collect();
 
-    assert!(!tool_result_events.is_empty(), "ToolResult progress event must be emitted");
+    assert!(
+        !tool_result_events.is_empty(),
+        "ToolResult progress event must be emitted"
+    );
 
-    if let AgentProgressEvent::ToolResult { truncated_content, .. } = &tool_result_events[0] {
+    if let AgentProgressEvent::ToolResult {
+        truncated_content, ..
+    } = &tool_result_events[0]
+    {
         // Content was longer than 120 bytes so it must have been truncated.
         assert!(
             truncated_content.ends_with('…'),
@@ -1573,9 +1587,15 @@ async fn given_tool_result_with_emoji_content_when_truncating_then_no_panic_and_
         .filter(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
         .collect();
 
-    assert!(!tool_result_events.is_empty(), "ToolResult progress event must be emitted");
+    assert!(
+        !tool_result_events.is_empty(),
+        "ToolResult progress event must be emitted"
+    );
 
-    if let AgentProgressEvent::ToolResult { truncated_content, .. } = &tool_result_events[0] {
+    if let AgentProgressEvent::ToolResult {
+        truncated_content, ..
+    } = &tool_result_events[0]
+    {
         assert!(
             truncated_content.ends_with('…'),
             "truncated content must end with ellipsis, got: {truncated_content:?}"
@@ -1609,7 +1629,9 @@ async fn given_tool_result_shorter_than_limit_when_truncating_then_content_retur
         events.push(evt);
     }
 
-    if let Some(AgentProgressEvent::ToolResult { truncated_content, .. }) = events
+    if let Some(AgentProgressEvent::ToolResult {
+        truncated_content, ..
+    }) = events
         .iter()
         .find(|e| matches!(e, AgentProgressEvent::ToolResult { .. }))
     {
@@ -1617,5 +1639,90 @@ async fn given_tool_result_shorter_than_limit_when_truncating_then_content_retur
             truncated_content, &content,
             "short content must not be modified"
         );
+    }
+}
+
+// ─── System-prompt tests ──────────────────────────────────────────────────────
+
+/// Mock that captures the first message received by `complete_with_tools`.
+struct MockLlmCaptureFirstMessage {
+    first_message: std::sync::Mutex<Option<AgentMessage>>,
+}
+
+impl MockLlmCaptureFirstMessage {
+    fn new() -> Self {
+        Self {
+            first_message: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmCaptureFirstMessage {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        Ok(String::new())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        messages: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let mut guard = self.first_message.lock().unwrap();
+        if guard.is_none() {
+            *guard = messages.first().cloned();
+        }
+        Ok(LlmToolResponse::Content("answer".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn given_configured_system_prompt_when_agent_chat_called_then_system_message_is_first() {
+    let expected_prompt = "You are a specialized agent for testing.";
+    let llm = Arc::new(MockLlmCaptureFirstMessage::new());
+    let llm_clone = Arc::clone(&llm);
+
+    let service = build_service_with_config(
+        llm,
+        Arc::new(MockMcpSuccess),
+        AgentServiceConfig {
+            system_prompt: expected_prompt.to_string(),
+            ..default_config()
+        },
+    );
+
+    service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "hello".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let captured = llm_clone
+        .first_message
+        .lock()
+        .unwrap()
+        .take()
+        .expect("LLM must have received at least one message");
+
+    match captured {
+        AgentMessage::System(prompt) => {
+            assert_eq!(
+                prompt, expected_prompt,
+                "first message must be the configured system prompt"
+            );
+        }
+        other => panic!("expected AgentMessage::System as first message, got: {other:?}"),
     }
 }

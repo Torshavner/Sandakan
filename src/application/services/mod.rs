@@ -27,7 +27,7 @@ mod token_counter;
 
 pub use agent_service::{
     AgentChatRequest, AgentChatResponse, AgentError, AgentProgressEvent, AgentService,
-    AgentServiceConfig, AgentServicePort, ReflectionSettings,
+    AgentServiceConfig, AgentServicePort, DEFAULT_AGENT_SYSTEM_PROMPT, ReflectionSettings,
 };
 pub use eval_worker::{EvalWorker, EvalWorkerError};
 pub use ingestion_service::{IngestionError, IngestionService};

@@ -254,6 +254,8 @@ pub struct AgentSettings {
     pub tool_timeout_secs: u64,
     #[serde(default)]
     pub tool_fail_fast: bool,
+    #[serde(default = "default_agent_system_prompt")]
+    pub system_prompt: String,
     #[serde(default)]
     pub web_search: Option<WebSearchSettings>,
     #[serde(default)]
@@ -390,6 +392,10 @@ fn default_notification_timeout() -> u64 {
     10
 }
 
+fn default_agent_system_prompt() -> String {
+    crate::application::services::DEFAULT_AGENT_SYSTEM_PROMPT.to_string()
+}
+
 fn default_max_iterations() -> usize {
     10
 }
@@ -413,6 +419,7 @@ impl Default for AgentSettings {
             max_iterations: default_max_iterations(),
             tool_timeout_secs: default_tool_timeout_secs(),
             tool_fail_fast: false,
+            system_prompt: default_agent_system_prompt(),
             web_search: None,
             rag_search_enabled: false,
             notification: None,

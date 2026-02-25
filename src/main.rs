@@ -428,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
             max_iterations: settings.agent.max_iterations,
             tool_timeout_secs: settings.agent.tool_timeout_secs,
             tool_fail_fast: settings.agent.tool_fail_fast,
+            system_prompt: settings.agent.system_prompt.clone(),
             reflection: sandakan::application::services::ReflectionSettings {
                 enabled: settings.agent.reflection.enabled,
                 score_threshold: settings.agent.reflection.score_threshold,
