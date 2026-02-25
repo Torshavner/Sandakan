@@ -52,7 +52,6 @@ impl EvalOperationType {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalSource {
     pub text: String,

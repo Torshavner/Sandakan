@@ -9,7 +9,8 @@ use sandakan::application::ports::{
     ToolSchema,
 };
 use sandakan::application::services::{
-    AgentChatRequest, AgentError, AgentService, AgentServiceConfig, AgentServicePort,
+    AgentChatRequest, AgentError, AgentProgressEvent, AgentService, AgentServiceConfig,
+    AgentServicePort, ReflectionSettings,
 };
 use sandakan::domain::{
     Conversation, ConversationId, EvalSource, Message, ToolCall, ToolCallId, ToolName, ToolResult,
@@ -200,6 +201,26 @@ fn default_config() -> AgentServiceConfig {
         max_iterations: 3,
         tool_timeout_secs: 30,
         tool_fail_fast: false,
+        reflection: ReflectionSettings::default(),
+    }
+}
+
+fn reflection_config(
+    enabled: bool,
+    score_threshold: f32,
+    correction_budget: usize,
+) -> AgentServiceConfig {
+    AgentServiceConfig {
+        model_config: "test/model".to_string(),
+        max_iterations: 3,
+        tool_timeout_secs: 30,
+        tool_fail_fast: false,
+        reflection: ReflectionSettings {
+            enabled,
+            score_threshold,
+            correction_budget,
+            critic_system_prompt: "You are a critic.".to_string(),
+        },
     }
 }
 
@@ -991,5 +1012,403 @@ async fn given_one_of_two_parallel_tools_fails_when_fail_fast_false_then_other_r
         result.is_ok(),
         "Expected Ok with soft-fail, got: {:?}",
         result.err()
+    );
+}
+
+// ─── Reflection tests ─────────────────────────────────────────────────────────
+
+// Mock: LLM returns high critic score → no correction needed.
+struct MockLlmHighCriticScore;
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmHighCriticScore {
+    async fn complete(&self, _prompt: &str, _ctx: &str) -> Result<String, LlmClientError> {
+        // Critic response: score above default threshold of 0.7
+        Ok("SCORE: 0.85\nISSUES: none".to_string())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("High-quality answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        Ok(LlmToolResponse::Content("High-quality answer".to_string()))
+    }
+}
+
+// Mock: LLM returns low critic score on first `complete` call, then a corrected answer.
+struct MockLlmLowCriticScoreThenCorrection {
+    complete_call_count: AtomicU32,
+    complete_with_tools_count: AtomicU32,
+}
+
+impl MockLlmLowCriticScoreThenCorrection {
+    fn new() -> Self {
+        Self {
+            complete_call_count: AtomicU32::new(0),
+            complete_with_tools_count: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmLowCriticScoreThenCorrection {
+    async fn complete(&self, _prompt: &str, _ctx: &str) -> Result<String, LlmClientError> {
+        self.complete_call_count.fetch_add(1, Ordering::SeqCst);
+        // Critic response: score below threshold
+        Ok("SCORE: 0.45\nISSUES: incomplete, missing sources".to_string())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Refined answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        let count = self
+            .complete_with_tools_count
+            .fetch_add(1, Ordering::SeqCst);
+        if count == 0 {
+            // ReAct loop: return candidate answer
+            Ok(LlmToolResponse::Content(
+                "Weak candidate answer".to_string(),
+            ))
+        } else {
+            // Correction pass: return refined answer
+            Ok(LlmToolResponse::Content("Refined answer".to_string()))
+        }
+    }
+}
+
+// Mock: LLM returns unparseable critic response.
+struct MockLlmUnparseableCritic;
+
+#[async_trait::async_trait]
+impl LlmClient for MockLlmUnparseableCritic {
+    async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+        Ok("This is not a valid critic response format at all.".to_string())
+    }
+    async fn complete_stream(&self, _: &str, _: &str) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn complete_stream_with_messages(
+        &self,
+        _: &[AgentMessage],
+    ) -> Result<LlmTokenStream, LlmClientError> {
+        Ok(Box::pin(futures::stream::once(async {
+            Ok("Original answer".to_string())
+        })))
+    }
+    async fn complete_with_tools(
+        &self,
+        _: &[AgentMessage],
+        _: &[ToolSchema],
+    ) -> Result<LlmToolResponse, LlmClientError> {
+        Ok(LlmToolResponse::Content("Original answer".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn given_high_quality_answer_when_reflection_enabled_then_no_correction_pass_runs() {
+    let llm = Arc::new(MockLlmHighCriticScore);
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 1));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "What is Rust?".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    // Collect progress events.
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    assert_eq!(
+        reflection_events.len(),
+        1,
+        "exactly one Reflection event expected"
+    );
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert!(
+        correction_events.is_empty(),
+        "no CorrectionApplied event expected for high-score answer"
+    );
+
+    if let AgentProgressEvent::Reflection {
+        score,
+        needs_correction,
+        ..
+    } = reflection_events[0]
+    {
+        assert!(*score >= 0.7, "score should be above threshold");
+        assert!(
+            !needs_correction,
+            "needs_correction must be false for high score"
+        );
+    }
+}
+
+#[tokio::test]
+async fn given_low_score_answer_when_reflection_enabled_then_correction_message_appended_and_refined_answer_returned()
+ {
+    let llm = Arc::new(MockLlmLowCriticScoreThenCorrection::new());
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 1));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Explain something complex".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    assert_eq!(reflection_events.len(), 1);
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert_eq!(
+        correction_events.len(),
+        1,
+        "CorrectionApplied event must be emitted after low-score answer"
+    );
+
+    if let AgentProgressEvent::Reflection {
+        score,
+        needs_correction,
+        issues,
+    } = reflection_events[0]
+    {
+        assert!(*score < 0.7, "score should be below threshold");
+        assert!(
+            needs_correction,
+            "needs_correction must be true for low score"
+        );
+        assert!(!issues.is_empty(), "issues must be non-empty");
+    }
+}
+
+#[tokio::test]
+async fn given_correction_budget_zero_when_score_below_threshold_then_original_answer_returned() {
+    let llm = Arc::new(MockLlmLowCriticScoreThenCorrection::new());
+    let mcp = Arc::new(MockMcpSuccess);
+    // Budget = 0: even if score is low, no correction pass runs.
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 0));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Budget is zero".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert!(
+        correction_events.is_empty(),
+        "no correction should run when budget = 0"
+    );
+
+    // Reflection event still emitted (we still evaluate), but needs_correction is false
+    // because budget = 0 means the condition `score < threshold AND budget > 0` is false.
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    assert_eq!(reflection_events.len(), 1, "Reflection event still emitted");
+
+    if let AgentProgressEvent::Reflection {
+        needs_correction, ..
+    } = reflection_events[0]
+    {
+        assert!(
+            !needs_correction,
+            "needs_correction must be false when budget = 0"
+        );
+    }
+}
+
+#[tokio::test]
+async fn given_reflection_disabled_when_agent_runs_then_critic_llm_not_called() {
+    // With reflection disabled, only complete_with_tools is called (not complete).
+    struct MockLlmTrackCompleteCalls {
+        complete_call_count: AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for MockLlmTrackCompleteCalls {
+        async fn complete(&self, _: &str, _: &str) -> Result<String, LlmClientError> {
+            self.complete_call_count.fetch_add(1, Ordering::SeqCst);
+            Ok("should not be called".to_string())
+        }
+        async fn complete_stream(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+        async fn complete_stream_with_messages(
+            &self,
+            _: &[AgentMessage],
+        ) -> Result<LlmTokenStream, LlmClientError> {
+            Ok(Box::pin(futures::stream::once(async {
+                Ok("Direct answer".to_string())
+            })))
+        }
+        async fn complete_with_tools(
+            &self,
+            _: &[AgentMessage],
+            _: &[ToolSchema],
+        ) -> Result<LlmToolResponse, LlmClientError> {
+            Ok(LlmToolResponse::Content("Direct answer".to_string()))
+        }
+    }
+
+    let llm = Arc::new(MockLlmTrackCompleteCalls {
+        complete_call_count: AtomicU32::new(0),
+    });
+    let complete_call_count = Arc::clone(&llm);
+    let mcp = Arc::new(MockMcpSuccess);
+
+    // Reflection disabled.
+    let service = build_service_with_config(llm, mcp, reflection_config(false, 0.7, 1));
+
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "Simple question".to_string(),
+        })
+        .await
+        .expect("chat should succeed");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    assert!(
+        reflection_events.is_empty(),
+        "no Reflection event when reflection is disabled"
+    );
+
+    assert_eq!(
+        complete_call_count
+            .complete_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "critic LLM (complete) must not be called when reflection is disabled"
+    );
+}
+
+#[tokio::test]
+async fn given_critic_returns_unparseable_response_when_reflecting_then_answer_returned_unchanged()
+{
+    let llm = Arc::new(MockLlmUnparseableCritic);
+    let mcp = Arc::new(MockMcpSuccess);
+    let service = build_service_with_config(llm, mcp, reflection_config(true, 0.7, 1));
+
+    // Should not error out — graceful degradation treats unparseable as score = 1.0.
+    let mut response = service
+        .chat(AgentChatRequest {
+            conversation_id: None,
+            user_message: "What does the critic say?".to_string(),
+        })
+        .await
+        .expect("chat should succeed even with unparseable critic response");
+
+    let mut events = Vec::new();
+    while let Ok(evt) = response.progress_rx.try_recv() {
+        events.push(evt);
+    }
+
+    // Reflection event emitted with score = 1.0 (default), needs_correction = false.
+    let reflection_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::Reflection { .. }))
+        .collect();
+
+    assert_eq!(reflection_events.len(), 1, "Reflection event emitted");
+
+    if let AgentProgressEvent::Reflection {
+        score,
+        needs_correction,
+        ..
+    } = reflection_events[0]
+    {
+        assert_eq!(*score, 1.0, "unparseable response treated as score = 1.0");
+        assert!(!needs_correction, "needs_correction false for score = 1.0");
+    }
+
+    let correction_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentProgressEvent::CorrectionApplied))
+        .collect();
+
+    assert!(
+        correction_events.is_empty(),
+        "no CorrectionApplied for unparseable critic"
     );
 }

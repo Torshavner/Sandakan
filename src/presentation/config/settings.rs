@@ -264,6 +264,43 @@ pub struct AgentSettings {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub fs_tools: Option<FsToolSettings>,
+    #[serde(default)]
+    pub reflection: ReflectionSettings,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReflectionSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reflection_score_threshold")]
+    pub score_threshold: f32,
+    #[serde(default = "default_reflection_correction_budget")]
+    pub correction_budget: usize,
+    #[serde(default = "default_critic_system_prompt")]
+    pub critic_system_prompt: String,
+}
+
+fn default_reflection_score_threshold() -> f32 {
+    0.7
+}
+
+fn default_reflection_correction_budget() -> usize {
+    1
+}
+
+fn default_critic_system_prompt() -> String {
+    "You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\n- Completeness: does it address the full question?\n- Grounding: is it consistent with what was retrieved (no hallucination)?\n- Clarity: is it clear and actionable?\n\nRespond ONLY in this format:\nSCORE: 0.X\nISSUES: <comma-separated list, or \"none\">".to_string()
+}
+
+impl Default for ReflectionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            score_threshold: default_reflection_score_threshold(),
+            correction_budget: default_reflection_correction_budget(),
+            critic_system_prompt: default_critic_system_prompt(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -381,6 +418,7 @@ impl Default for AgentSettings {
             notification: None,
             mcp_servers: Vec::new(),
             fs_tools: None,
+            reflection: ReflectionSettings::default(),
         }
     }
 }

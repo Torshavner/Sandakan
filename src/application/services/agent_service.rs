@@ -41,6 +41,12 @@ pub enum AgentProgressEvent {
         name: String,
         truncated_content: String,
     },
+    Reflection {
+        score: f32,
+        needs_correction: bool,
+        issues: Vec<String>,
+    },
+    CorrectionApplied,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,6 +82,27 @@ pub trait AgentServicePort: Send + Sync {
 
 // ─── Service config ───────────────────────────────────────────────────────────
 
+pub struct ReflectionSettings {
+    pub enabled: bool,
+    /// Minimum score (0.0–1.0) for an answer to be returned without correction.
+    pub score_threshold: f32,
+    /// Maximum number of correction passes per turn (prevents run-away LLM cost).
+    pub correction_budget: usize,
+    /// System prompt sent to the critic LLM call.
+    pub critic_system_prompt: String,
+}
+
+impl Default for ReflectionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            score_threshold: 0.7,
+            correction_budget: 1,
+            critic_system_prompt: DEFAULT_CRITIC_PROMPT.to_string(),
+        }
+    }
+}
+
 pub struct AgentServiceConfig {
     pub model_config: String,
     pub max_iterations: usize,
@@ -85,6 +112,7 @@ pub struct AgentServiceConfig {
     /// When `true`, any tool error (except `ToolNotFound`) hard-fails the turn.
     /// When `false` (default), errors are surfaced as `[tool_error]` ToolResults.
     pub tool_fail_fast: bool,
+    pub reflection: ReflectionSettings,
 }
 
 // ─── Concrete service ─────────────────────────────────────────────────────────
@@ -277,6 +305,69 @@ impl AgentService {
             });
         }
     }
+
+    /// Performs a critic pass on the candidate answer and, if the score falls
+    /// below the configured threshold and the budget allows, appends the critic's
+    /// feedback and runs one correction iteration.
+    ///
+    /// Gracefully degrades: any failure to parse the critic response is treated
+    /// as score = 1.0 so the original answer is returned unchanged.
+    async fn reflect_and_correct(
+        &self,
+        candidate_answer: String,
+        mut messages: Vec<AgentMessage>,
+        progress_tx: &tokio::sync::mpsc::Sender<AgentProgressEvent>,
+    ) -> Result<(String, Vec<AgentMessage>), AgentError> {
+        let cfg = &self.config.reflection;
+
+        let critic_prompt = format!(
+            "{}\n\nCandidate answer:\n{}",
+            cfg.critic_system_prompt, candidate_answer
+        );
+
+        let raw = match self.llm_client.complete(&critic_prompt, "").await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "Critic LLM call failed; skipping reflection");
+                return Ok((candidate_answer, messages));
+            }
+        };
+
+        let (score, issues) = parse_critic_response(&raw);
+
+        let needs_correction = score < cfg.score_threshold && cfg.correction_budget > 0;
+
+        let _ = progress_tx.try_send(AgentProgressEvent::Reflection {
+            score,
+            needs_correction,
+            issues: issues.clone(),
+        });
+
+        if !needs_correction {
+            return Ok((candidate_answer, messages));
+        }
+
+        let feedback = format!(
+            "Your previous answer scored {score:.2}/1.0 for completeness and grounding. Issues noted:\n{}\n\nPlease provide a corrected, more complete answer.",
+            issues.join(", ")
+        );
+        messages.push(AgentMessage::User(feedback));
+
+        let tools = self.tool_registry.list_tools();
+        let refined = match self
+            .llm_client
+            .complete_with_tools(&messages, &tools)
+            .await?
+        {
+            LlmToolResponse::Content(r) => r,
+            // If the LLM calls a tool instead of correcting, return the original answer.
+            LlmToolResponse::ToolCalls(_) => candidate_answer,
+        };
+
+        let _ = progress_tx.try_send(AgentProgressEvent::CorrectionApplied);
+
+        Ok((refined, messages))
+    }
 }
 
 #[async_trait]
@@ -301,9 +392,16 @@ impl AgentServicePort for AgentService {
         // Bounded channel — progress events are cheap and numerous, 64 slots is ample.
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(64);
 
-        let (answer, final_messages) = self
+        let (candidate_answer, candidate_messages) = self
             .run_react_loop(request.user_message.clone(), conversation_id, &progress_tx)
             .await?;
+
+        let (answer, final_messages) = if self.config.reflection.enabled {
+            self.reflect_and_correct(candidate_answer, candidate_messages, &progress_tx)
+                .await?
+        } else {
+            (candidate_answer, candidate_messages)
+        };
 
         // Drop sender so the handler's drain loop sees the channel as closed.
         drop(progress_tx);
@@ -331,10 +429,48 @@ impl AgentServicePort for AgentService {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const DEFAULT_CRITIC_PROMPT: &str = "\
+You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\
+\n- Completeness: does it address the full question?\
+\n- Grounding: is it consistent with what was retrieved (no hallucination)?\
+\n- Clarity: is it clear and actionable?\
+\n\nRespond ONLY in this format:\
+\nSCORE: 0.X\
+\nISSUES: <comma-separated list, or \"none\">";
+
 fn truncate_for_event(s: &str, max_chars: usize) -> String {
     if s.len() <= max_chars {
         s.to_string()
     } else {
         format!("{}…", &s[..max_chars])
     }
+}
+
+/// Parses `SCORE: 0.X` and `ISSUES: ...` lines from a critic response.
+///
+/// Returns `(1.0, [])` on any parse failure so the caller treats the answer as
+/// passing and skips the correction pass (graceful degradation).
+fn parse_critic_response(raw: &str) -> (f32, Vec<String>) {
+    let mut score: f32 = 1.0;
+    let mut issues: Vec<String> = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("SCORE:") {
+            if let Ok(v) = rest.trim().parse::<f32>() {
+                score = v.clamp(0.0, 1.0);
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("ISSUES:") {
+            let rest = rest.trim();
+            if !rest.eq_ignore_ascii_case("none") {
+                issues = rest
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+    }
+
+    (score, issues)
 }
