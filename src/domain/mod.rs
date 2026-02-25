@@ -1,5 +1,4 @@
 //! @AI: domain module routing map
-//! - agent_state    -> AgentState enum (Thinking | AwaitingToolExecution | YieldingResponse | Failed).
 //! - chunk          -> Chunk (text + metadata), ChunkId (UUID newtype), DocumentId (UUID newtype).
 //! - conversation   -> Conversation aggregate with ordered Message history.
 //! - conversation_id -> ConversationId (UUID newtype) with from_uuid / as_uuid.
@@ -26,7 +25,6 @@
 //! - tool_call      -> ToolCallId (String newtype), ToolName (String newtype),
 //!   ToolCall (id + name + arguments: Value), ToolResult (tool_call_id + tool_name + content).
 
-mod agent_state;
 mod chunk;
 mod conversation;
 mod conversation_id;
@@ -45,7 +43,6 @@ mod message_role;
 mod storage_path;
 mod tool_call;
 
-pub use agent_state::AgentState;
 pub use chunk::{Chunk, ChunkId, DocumentId};
 pub use conversation::Conversation;
 pub use conversation_id::ConversationId;

@@ -10,9 +10,7 @@ use crate::application::ports::{
     LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RagSourceCollector,
     RepositoryError, ToolRegistry,
 };
-use crate::domain::{
-    AgentState, Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName,
-};
+use crate::domain::{Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName};
 
 // ─── Public surface ──────────────────────────────────────────────────────────
 
@@ -182,7 +180,6 @@ impl AgentService {
         messages.push(AgentMessage::User(user_message));
 
         let tools = self.tool_registry.list_tools();
-        let mut _state = AgentState::Thinking;
         let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
 
         for iteration in 0..self.config.max_iterations {
@@ -195,8 +192,6 @@ impl AgentService {
                 .await?
             {
                 LlmToolResponse::ToolCalls(calls) => {
-                    _state = AgentState::AwaitingToolExecution;
-
                     // Append the assistant's tool-call intent to message history.
                     messages.push(AgentMessage::Assistant {
                         content: None,
@@ -249,12 +244,9 @@ impl AgentService {
 
                         messages.push(AgentMessage::ToolResult(tool_result));
                     }
-
-                    _state = AgentState::Thinking;
                 }
 
                 LlmToolResponse::Content(answer) => {
-                    _state = AgentState::YieldingResponse;
                     return Ok((answer, messages));
                 }
             }
@@ -455,13 +447,17 @@ impl AgentServicePort for AgentService {
 
         self.fire_and_forget_eval(&request.user_message, &answer);
 
-        // Stream the final answer token-by-token using the full conversation history.
-        // The buffered `answer` above is used only for persistence; the streaming
-        // call independently produces the SSE token output seen by the client.
-        let token_stream: LlmTokenStream = self
-            .llm_client
-            .complete_stream_with_messages(&final_messages)
-            .await?;
+        // Fake-stream the already-buffered answer by splitting on whitespace.
+        // This avoids a redundant LLM call (Option A): the ReAct loop already
+        // produced the full answer via complete_with_tools; re-calling
+        // complete_stream_with_messages would duplicate cost and latency.
+        let token_stream: LlmTokenStream = {
+            let words: Vec<Result<String, LlmClientError>> = answer
+                .split_inclusive(' ')
+                .map(|w| Ok(w.to_string()))
+                .collect();
+            Box::pin(futures::stream::iter(words))
+        };
 
         Ok(AgentChatResponse {
             progress_rx,
