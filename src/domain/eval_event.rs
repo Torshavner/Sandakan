@@ -31,9 +31,10 @@ impl std::fmt::Display for EvalEventId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvalOperationType {
+    #[default]
     Query,
     AgenticRun,
     IngestionPdf,
@@ -51,11 +52,6 @@ impl EvalOperationType {
     }
 }
 
-impl Default for EvalOperationType {
-    fn default() -> Self {
-        Self::Query
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalSource {

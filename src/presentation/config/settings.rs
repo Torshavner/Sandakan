@@ -262,6 +262,25 @@ pub struct AgentSettings {
     pub notification: Option<NotificationSettings>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub fs_tools: Option<FsToolSettings>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FsToolSettings {
+    pub root_path: String,
+    #[serde(default = "default_max_read_bytes")]
+    pub max_read_bytes: usize,
+    #[serde(default = "default_max_dir_entries")]
+    pub max_dir_entries: usize,
+}
+
+fn default_max_read_bytes() -> usize {
+    32_768
+}
+
+fn default_max_dir_entries() -> usize {
+    200
 }
 
 /// Discriminated union over the two MCP wire transports.
@@ -361,6 +380,7 @@ impl Default for AgentSettings {
             rag_search_enabled: false,
             notification: None,
             mcp_servers: Vec::new(),
+            fs_tools: None,
         }
     }
 }

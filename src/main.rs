@@ -36,7 +36,7 @@ use sandakan::infrastructure::text_processing::{
 };
 use sandakan::infrastructure::tools::{
     InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
-    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
+    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
 };
 use sandakan::presentation::{
     AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
@@ -345,6 +345,28 @@ async fn main() -> anyhow::Result<()> {
                 webhook_url = %notif.webhook_url,
                 "Notification webhook tool registered"
             );
+        }
+
+        if let Some(fs_cfg) = &settings.agent.fs_tools {
+            match build_fs_tools(
+                &fs_cfg.root_path,
+                fs_cfg.max_read_bytes,
+                fs_cfg.max_dir_entries,
+            ) {
+                Ok((list_tool, read_tool)) => {
+                    schemas.push(sandakan::infrastructure::tools::ListDirectoryTool::tool_schema());
+                    schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
+                    handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
+                    handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
+                    tracing::info!(
+                        root_path = %fs_cfg.root_path,
+                        "Filesystem introspection tools registered (list_directory, read_file)"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to initialize fs_tools — tools not registered");
+                }
+            }
         }
 
         // Build a composite MCP client: one entry per configured wire server.

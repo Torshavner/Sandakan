@@ -5,8 +5,9 @@ pub mod state;
 
 pub use config::{
     ChunkingStrategy, EmbeddingProvider, Environment, EvalSettings, ExtractorProvider,
-    McpServerConfig, NotificationFormatSetting, RagSettings, Settings, SseMcpServerConfig,
-    StdioMcpServerConfig, StorageProviderSetting, StorageSettings, TranscriptionProviderSetting,
+    FsToolSettings, McpServerConfig, NotificationFormatSetting, RagSettings, Settings,
+    SseMcpServerConfig, StdioMcpServerConfig, StorageProviderSetting, StorageSettings,
+    TranscriptionProviderSetting,
 };
 pub use router::create_router;
 pub use state::AppState;

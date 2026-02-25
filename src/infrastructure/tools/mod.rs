@@ -13,13 +13,18 @@
 //!   Supports Plain and Slack body formats. Registered only when agent.notification.webhook_url is set.
 //!   build_body() is a pure fn — testable without HTTP.
 //! - static_tool_registry     -> StaticToolRegistry: implements ToolRegistry with a fixed Vec<ToolSchema>.
+//! - fs_tool_adapter          -> ListDirectoryTool + ReadFileTool: bounded filesystem introspection.
+//!   Both share FsToolInner (canonicalized root_path, path-traversal guard).
+//!   Registered only when agent.fs_tools is configured. build_fs_tools() constructs the pair.
 
+mod fs_tool_adapter;
 mod in_memory_rag_source_collector;
 mod notification_adapter;
 mod rag_search_adapter;
 mod static_tool_registry;
 mod web_search_adapter;
 
+pub use fs_tool_adapter::{ListDirectoryTool, ReadFileTool, build_fs_tools};
 pub use in_memory_rag_source_collector::InMemoryRagSourceCollector;
 pub use notification_adapter::{
     NotificationAdapter, NotificationConfig, NotificationFormat,

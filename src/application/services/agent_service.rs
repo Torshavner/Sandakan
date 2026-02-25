@@ -101,6 +101,7 @@ pub struct AgentService {
 }
 
 impl AgentService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         llm_client: Arc<dyn LlmClient>,
         mcp_client: Arc<dyn McpClientPort>,
