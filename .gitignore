@@ -4,6 +4,7 @@ CLAUDE.md
 !.ai/agents/**/CLAUDE.md
 
 goal.md
+goal.capstone.md
 .env
 settings.local.json
 .claude-agent
