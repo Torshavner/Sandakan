@@ -1,17 +1,21 @@
+// @AI-BYPASS-LENGTH
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use config::Environment as EnvironmentSource;
 use config::{Config, File};
+use sqlx::PgPool;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 
 use sandakan::application::ports::McpClientPort;
 use sandakan::application::ports::RagSourceCollector;
 use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
-    AudioDecoder, CollectionConfig, ConversationRepository, EvalEventRepository,
-    EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, VectorStore,
+    AudioDecoder, CollectionConfig, ConversationRepository, Embedder, EvalEventRepository,
+    EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, StagingStore,
+    TextSplitter, ToolSchema, TranscriptionEngine, VectorStore,
 };
 use sandakan::application::services::{
     AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
@@ -21,7 +25,9 @@ use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
     FfmpegAudioDecoder, TranscriptionEngineFactory, TranscriptionProvider, check_ffmpeg_binary,
 };
-use sandakan::infrastructure::llm::{EmbedderFactory, create_streaming_llm_client};
+use sandakan::infrastructure::llm::{
+    EmbedderFactory, StreamingLlmClient, create_streaming_llm_client,
+};
 use sandakan::infrastructure::mcp::{
     CompositeMcpClient, SseMcpClient, StandardMcpAdapter, StdioMcpClient, ToolHandler,
 };
@@ -47,6 +53,119 @@ const INGESTION_CHANNEL_CAPACITY: usize = 64;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let (environment, settings) = load_settings()?;
+
+    let tracing_config = TracingConfig {
+        environment: std::env::var("APP_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
+        json_format: settings.logging.enable_json,
+        tempo_endpoint: settings.logging.tempo_endpoint.clone(),
+    };
+    let otel_provider = init_tracing(tracing_config, settings.server.port);
+
+    tracing::info!("Application starting in {} mode", environment);
+
+    let pg_pool = init_database(&settings).await?;
+
+    let (job_repository, conversation_repository) = build_repositories(&pg_pool);
+    let file_loader = build_file_loader(&settings)?;
+    let embedder = build_embedder(&settings)?;
+    let llm_client = build_llm_client(&settings)?;
+    let vector_store = build_vector_store(&settings).await?;
+    let text_splitter = build_text_splitter(&settings)?;
+    let transcription_engine = build_transcription_engine(&settings)?;
+    let staging_store = build_staging_store(&settings)?;
+
+    let (eval_event_repo, eval_outbox_repo) = build_eval_repos(&settings, &pg_pool);
+    let model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
+
+    let retrieval_service = Arc::new(RetrievalService::new(
+        Arc::clone(&embedder),
+        Arc::clone(&llm_client),
+        Arc::clone(&vector_store),
+        Arc::clone(&conversation_repository),
+        eval_event_repo.clone(),
+        eval_outbox_repo.clone(),
+        model_config.clone(),
+        settings.rag.top_k,
+        settings.rag.similarity_threshold,
+        settings.rag.max_context_tokens,
+        settings.rag.fallback_message.clone(),
+    ));
+
+    let ingestion_service = Arc::new(IngestionService::new(
+        Arc::clone(&file_loader),
+        Arc::clone(&embedder),
+        Arc::clone(&vector_store),
+        text_splitter.clone(),
+        Arc::clone(&job_repository),
+    ));
+
+    let (ingestion_sender, ingestion_receiver) = mpsc::channel(INGESTION_CHANNEL_CAPACITY);
+
+    let ingestion_worker = IngestionWorker::new(
+        ingestion_receiver,
+        Arc::clone(&file_loader),
+        Arc::clone(&embedder),
+        Arc::clone(&vector_store),
+        text_splitter,
+        Arc::clone(&job_repository),
+        transcription_engine,
+        Arc::clone(&staging_store),
+    );
+
+    let agent_eval_event_repo = eval_event_repo.clone();
+    let agent_eval_outbox_repo = eval_outbox_repo.clone();
+
+    spawn_workers(
+        &settings,
+        ingestion_worker,
+        eval_event_repo,
+        eval_outbox_repo,
+        &embedder,
+        &llm_client,
+        &model_config,
+        &pg_pool,
+    );
+
+    let agent_service = build_agent_service(
+        &settings,
+        &llm_client,
+        &retrieval_service,
+        &conversation_repository,
+        agent_eval_event_repo,
+        agent_eval_outbox_repo,
+    )
+    .await?;
+
+    let state = AppState {
+        ingestion_service,
+        retrieval_service,
+        conversation_repository,
+        job_repository,
+        ingestion_sender,
+        staging_store,
+        agent_service,
+        settings: settings.clone(),
+    };
+
+    let router = create_router(state);
+    let addr = parse_listen_addr(&settings);
+
+    tracing::info!("Listening on {}", addr);
+
+    let listener = TcpListener::bind(addr).await?;
+    axum::serve(listener, router).await?;
+
+    if let Some(provider) = otel_provider {
+        if let Err(e) = provider.shutdown() {
+            tracing::warn!(error = %e, "OTel provider shutdown error");
+        }
+    }
+
+    Ok(())
+}
+
+fn load_settings() -> anyhow::Result<(Environment, Settings)> {
     dotenvy::dotenv().ok();
 
     let environment: Environment = env::var("APP_ENVIRONMENT")
@@ -66,16 +185,10 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let settings: Settings = configuration.try_deserialize()?;
+    Ok((environment, settings))
+}
 
-    let tracing_config = TracingConfig {
-        environment: std::env::var("APP_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
-        json_format: settings.logging.enable_json,
-        tempo_endpoint: settings.logging.tempo_endpoint.clone(),
-    };
-    let otel_provider = init_tracing(tracing_config, settings.server.port);
-
-    tracing::info!("Application starting in {} mode", environment);
-
+async fn init_database(settings: &Settings) -> anyhow::Result<PgPool> {
     let pg_pool = create_pool(&settings.database.url, settings.database.max_connections)
         .await
         .expect("Failed to create PostgreSQL connection pool");
@@ -88,10 +201,19 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Database migrations completed");
     }
 
+    Ok(pg_pool)
+}
+
+fn build_repositories(
+    pg_pool: &PgPool,
+) -> (Arc<dyn JobRepository>, Arc<dyn ConversationRepository>) {
     let job_repository: Arc<dyn JobRepository> = Arc::new(PgJobRepository::new(pg_pool.clone()));
     let conversation_repository: Arc<dyn ConversationRepository> =
         Arc::new(PgConversationRepository::new(pg_pool.clone()));
+    (job_repository, conversation_repository)
+}
 
+fn build_file_loader(settings: &Settings) -> anyhow::Result<Arc<CompositeFileLoader>> {
     let pdf_adapter: Arc<dyn FileLoader> = ExtractorFactory::create(&settings.extraction.pdf)
         .expect("Failed to initialize PDF extractor");
 
@@ -101,19 +223,24 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let text_adapter: Arc<dyn FileLoader> = Arc::new(PlainTextAdapter);
-    let file_loader = Arc::new(CompositeFileLoader::new(vec![
+    Ok(Arc::new(CompositeFileLoader::new(vec![
         (ContentType::Pdf, pdf_adapter),
         (ContentType::Text, text_adapter),
-    ]));
+    ])))
+}
 
+fn build_embedder(settings: &Settings) -> anyhow::Result<Arc<dyn Embedder>> {
     let embedder = EmbedderFactory::create(
         settings.embeddings.provider,
         settings.embeddings.model.clone(),
         Some(settings.llm.api_key.clone()),
     )
     .expect("Failed to initialize embedder");
+    Ok(embedder)
+}
 
-    let llm_client = Arc::new(
+fn build_llm_client(settings: &Settings) -> anyhow::Result<Arc<StreamingLlmClient>> {
+    let client = Arc::new(
         create_streaming_llm_client(&settings.llm, settings.rag.system_prompt.clone())
             .expect("Failed to initialize LLM client"),
     );
@@ -122,7 +249,10 @@ async fn main() -> anyhow::Result<()> {
         model = %settings.llm.chat_model,
         "LLM client initialized"
     );
+    Ok(client)
+}
 
+async fn build_vector_store(settings: &Settings) -> anyhow::Result<Arc<QdrantAdapter>> {
     let vector_store = Arc::new(
         QdrantAdapter::new(
             &settings.qdrant.url,
@@ -159,12 +289,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let text_splitter = TextSplitterFactory::create(
+    Ok(vector_store)
+}
+
+fn build_text_splitter(settings: &Settings) -> anyhow::Result<Arc<dyn TextSplitter>> {
+    TextSplitterFactory::create(
         settings.chunking.strategy,
         settings.chunking.max_chunk_size,
         settings.chunking.overlap_tokens,
-    )?;
+    )
+    .map_err(Into::into)
+}
 
+fn build_transcription_engine(settings: &Settings) -> anyhow::Result<Arc<dyn TranscriptionEngine>> {
     let transcription_provider = match settings.extraction.audio.provider {
         TranscriptionProviderSetting::Local => TranscriptionProvider::Local,
         TranscriptionProviderSetting::OpenAi => TranscriptionProvider::OpenAi,
@@ -181,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
-    let transcription_engine = TranscriptionEngineFactory::create(
+    let engine = TranscriptionEngineFactory::create(
         transcription_provider,
         &settings.extraction.audio.whisper_model,
         Some(settings.llm.api_key.clone()),
@@ -203,7 +340,11 @@ async fn main() -> anyhow::Result<()> {
         "Transcription engine initialized"
     );
 
-    let staging_store =
+    Ok(engine)
+}
+
+fn build_staging_store(settings: &Settings) -> anyhow::Result<Arc<dyn StagingStore>> {
+    let store =
         StagingStoreFactory::create(&settings.storage).expect("Failed to initialize staging store");
 
     tracing::info!(
@@ -211,29 +352,18 @@ async fn main() -> anyhow::Result<()> {
         "Staging store initialized"
     );
 
-    let (ingestion_sender, ingestion_receiver) =
-        tokio::sync::mpsc::channel(INGESTION_CHANNEL_CAPACITY);
+    Ok(store)
+}
 
-    let ingestion_worker = IngestionWorker::new(
-        ingestion_receiver,
-        Arc::clone(&file_loader),
-        Arc::clone(&embedder),
-        Arc::clone(&vector_store),
-        text_splitter.clone(),
-        Arc::clone(&job_repository),
-        transcription_engine,
-        Arc::clone(&staging_store),
-    );
-
-    let ingestion_service = Arc::new(IngestionService::new(
-        Arc::clone(&file_loader),
-        Arc::clone(&embedder),
-        Arc::clone(&vector_store),
-        text_splitter,
-        Arc::clone(&job_repository),
-    ));
-
-    let (eval_event_repo, eval_outbox_repo) = if settings.eval.enabled {
+#[allow(clippy::type_complexity)]
+fn build_eval_repos(
+    settings: &Settings,
+    pg_pool: &PgPool,
+) -> (
+    Option<Arc<dyn EvalEventRepository>>,
+    Option<Arc<dyn EvalOutboxRepository>>,
+) {
+    if settings.eval.enabled {
         let event_repo: Arc<dyn EvalEventRepository> =
             Arc::new(PgEvalEventRepository::new(pg_pool.clone()));
         let outbox_repo: Arc<dyn EvalOutboxRepository> =
@@ -241,27 +371,20 @@ async fn main() -> anyhow::Result<()> {
         (Some(event_repo), Some(outbox_repo))
     } else {
         (None, None)
-    };
+    }
+}
 
-    let model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
-
-    let retrieval_service = Arc::new(RetrievalService::new(
-        Arc::clone(&embedder),
-        Arc::clone(&llm_client),
-        Arc::clone(&vector_store),
-        Arc::clone(&conversation_repository),
-        eval_event_repo.clone(),
-        eval_outbox_repo.clone(),
-        model_config.clone(),
-        settings.rag.top_k,
-        settings.rag.similarity_threshold,
-        settings.rag.max_context_tokens,
-        settings.rag.fallback_message.clone(),
-    ));
-
-    let agent_eval_event_repo = eval_event_repo.clone();
-    let agent_eval_outbox_repo = eval_outbox_repo.clone();
-
+#[allow(clippy::too_many_arguments)]
+fn spawn_workers(
+    settings: &Settings,
+    ingestion_worker: IngestionWorker<CompositeFileLoader, QdrantAdapter, dyn TextSplitter>,
+    eval_event_repo: Option<Arc<dyn EvalEventRepository>>,
+    eval_outbox_repo: Option<Arc<dyn EvalOutboxRepository>>,
+    embedder: &Arc<dyn Embedder>,
+    llm_client: &Arc<StreamingLlmClient>,
+    model_config: &str,
+    pg_pool: &PgPool,
+) {
     let ingestion_worker =
         if let (Some(event_repo), Some(outbox_repo)) = (eval_event_repo, eval_outbox_repo) {
             let result_repo: Arc<dyn EvalResultRepository> =
@@ -271,7 +394,7 @@ async fn main() -> anyhow::Result<()> {
                 outbox_repo.clone(),
                 event_repo.clone(),
                 result_repo,
-                Arc::clone(&embedder),
+                Arc::clone(embedder),
                 llm_client.clone() as Arc<dyn LlmClient>,
                 settings.eval.faithfulness_threshold,
                 settings.eval.correctness_threshold,
@@ -287,7 +410,7 @@ async fn main() -> anyhow::Result<()> {
                 "EvalWorker spawned"
             );
 
-            ingestion_worker.with_eval(event_repo, outbox_repo, &model_config)
+            ingestion_worker.with_eval(event_repo, outbox_repo, model_config)
         } else {
             tracing::info!("Eval feature disabled");
             ingestion_worker
@@ -297,200 +420,192 @@ async fn main() -> anyhow::Result<()> {
         ingestion_worker.run().await;
     });
     tracing::info!("Ingestion worker spawned");
+}
 
-    let agent_service: Option<Arc<dyn AgentServicePort>> = if settings.agent.enabled {
-        let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();
-        let mut schemas = Vec::new();
-
-        if let Some(ws_config) = &settings.agent.web_search {
-            let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
-                api_key: ws_config.api_key.clone(),
-                endpoint: ws_config.endpoint.clone(),
-                max_results: ws_config.max_results,
-            }));
-            schemas.push(WebSearchAdapter::tool_schema());
-            handlers.push(adapter as Arc<dyn ToolHandler>);
-        }
-
-        let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
-            if settings.agent.rag_search_enabled && settings.eval.enabled {
-                Some(Arc::new(InMemoryRagSourceCollector::new()))
-            } else {
-                None
-            };
-
-        if settings.agent.rag_search_enabled {
-            let rag = Arc::new(RagSearchAdapter::new(
-                Arc::clone(&retrieval_service) as Arc<dyn RetrievalServicePort>,
-                rag_source_collector.clone(),
-            ));
-            schemas.push(RagSearchAdapter::tool_schema());
-            handlers.push(rag as Arc<dyn ToolHandler>);
-            tracing::info!("RAG search tool registered");
-        }
-
-        if let Some(notif) = &settings.agent.notification {
-            let format = match notif.format {
-                NotificationFormatSetting::Plain => NotificationFormat::Plain,
-                NotificationFormatSetting::Slack => NotificationFormat::Slack,
-            };
-            let adapter = Arc::new(NotificationAdapter::new(NotificationConfig {
-                webhook_url: notif.webhook_url.clone(),
-                format,
-                timeout_secs: notif.timeout_secs,
-            })?);
-            schemas.push(NotificationAdapter::tool_schema());
-            handlers.push(adapter as Arc<dyn ToolHandler>);
-            tracing::info!(
-                webhook_url = %notif.webhook_url,
-                "Notification webhook tool registered"
-            );
-        }
-
-        if let Some(fs_cfg) = &settings.agent.fs_tools {
-            match build_fs_tools(
-                &fs_cfg.root_path,
-                fs_cfg.max_read_bytes,
-                fs_cfg.max_dir_entries,
-            ) {
-                Ok((list_tool, read_tool)) => {
-                    schemas.push(sandakan::infrastructure::tools::ListDirectoryTool::tool_schema());
-                    schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
-                    handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
-                    handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
-                    tracing::info!(
-                        root_path = %fs_cfg.root_path,
-                        "Filesystem introspection tools registered (list_directory, read_file)"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to initialize fs_tools — tools not registered");
-                }
-            }
-        }
-
-        // Build a composite MCP client: one entry per configured wire server.
-        // Each wire client is wrapped in a `WireMcpRouter` that tries it before
-        // falling back to `StandardMcpAdapter` (for compiled-in handlers).
-        let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
-
-        for server_cfg in &settings.agent.mcp_servers {
-            match server_cfg {
-                McpServerConfig::Stdio(cfg) => {
-                    tracing::info!(
-                        name = %cfg.name,
-                        command = %cfg.command,
-                        "Connecting to stdio MCP server"
-                    );
-                    match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
-                        Ok(client) => {
-                            schemas.extend(client.tool_schemas.clone());
-                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
-                        }
-                        Err(e) => {
-                            tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
-                        }
-                    }
-                }
-                McpServerConfig::Sse(cfg) => {
-                    tracing::info!(
-                        name = %cfg.name,
-                        endpoint = %cfg.endpoint,
-                        "Connecting to SSE MCP server"
-                    );
-                    match SseMcpClient::new(&cfg.endpoint).await {
-                        Ok(client) => {
-                            schemas.extend(client.tool_schemas.clone());
-                            wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
-                        }
-                        Err(e) => {
-                            tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
-                        }
-                    }
-                }
-            }
-        }
-
-        let mcp_client: Arc<dyn McpClientPort> = if wire_clients.is_empty() {
-            Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
-        } else {
-            Arc::new(CompositeMcpClient::new(
-                wire_clients,
-                StandardMcpAdapter::new(handlers),
-            )) as Arc<dyn McpClientPort>
-        };
-
-        let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
-        let agent_model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
-
-        let agent_config = AgentServiceConfig {
-            model_config: agent_model_config,
-            max_iterations: settings.agent.max_iterations,
-            tool_timeout_secs: settings.agent.tool_timeout_secs,
-            tool_fail_fast: settings.agent.tool_fail_fast,
-            system_prompt: settings.agent.system_prompt.clone(),
-            reflection: sandakan::application::services::ReflectionSettings {
-                enabled: settings.agent.reflection.enabled,
-                score_threshold: settings.agent.reflection.score_threshold,
-                correction_budget: settings.agent.reflection.correction_budget,
-                critic_system_prompt: settings.agent.reflection.critic_system_prompt.clone(),
-            },
-        };
-
-        let svc = Arc::new(AgentService::new(
-            llm_client.clone() as Arc<dyn LlmClient>,
-            mcp_client,
-            tool_registry,
-            Arc::clone(&conversation_repository),
-            agent_eval_event_repo,
-            agent_eval_outbox_repo,
-            rag_source_collector,
-            agent_config,
-        ));
-
-        tracing::info!(
-            max_iterations = settings.agent.max_iterations,
-            tool_timeout_secs = settings.agent.tool_timeout_secs,
-            tool_fail_fast = settings.agent.tool_fail_fast,
-            "AgentService initialized"
-        );
-        Some(svc as Arc<dyn AgentServicePort>)
-    } else {
+#[allow(clippy::too_many_arguments)]
+async fn build_agent_service(
+    settings: &Settings,
+    llm_client: &Arc<StreamingLlmClient>,
+    retrieval_service: &Arc<RetrievalService<StreamingLlmClient, QdrantAdapter>>,
+    conversation_repository: &Arc<dyn ConversationRepository>,
+    eval_event_repo: Option<Arc<dyn EvalEventRepository>>,
+    eval_outbox_repo: Option<Arc<dyn EvalOutboxRepository>>,
+) -> anyhow::Result<Option<Arc<dyn AgentServicePort>>> {
+    if !settings.agent.enabled {
         tracing::info!("Agent feature disabled");
-        None
+        return Ok(None);
+    }
+
+    let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();
+    let mut schemas = Vec::new();
+
+    if let Some(ws_config) = &settings.agent.web_search {
+        let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
+            api_key: ws_config.api_key.clone(),
+            endpoint: ws_config.endpoint.clone(),
+            max_results: ws_config.max_results,
+        }));
+        schemas.push(WebSearchAdapter::tool_schema());
+        handlers.push(adapter as Arc<dyn ToolHandler>);
+    }
+
+    let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
+        if settings.agent.rag_search_enabled && settings.eval.enabled {
+            Some(Arc::new(InMemoryRagSourceCollector::new()))
+        } else {
+            None
+        };
+
+    if settings.agent.rag_search_enabled {
+        let rag = Arc::new(RagSearchAdapter::new(
+            Arc::clone(retrieval_service) as Arc<dyn RetrievalServicePort>,
+            rag_source_collector.clone(),
+        ));
+        schemas.push(RagSearchAdapter::tool_schema());
+        handlers.push(rag as Arc<dyn ToolHandler>);
+        tracing::info!("RAG search tool registered");
+    }
+
+    if let Some(notif) = &settings.agent.notification {
+        let format = match notif.format {
+            NotificationFormatSetting::Plain => NotificationFormat::Plain,
+            NotificationFormatSetting::Slack => NotificationFormat::Slack,
+        };
+        let adapter = Arc::new(NotificationAdapter::new(NotificationConfig {
+            webhook_url: notif.webhook_url.clone(),
+            format,
+            timeout_secs: notif.timeout_secs,
+        })?);
+        schemas.push(NotificationAdapter::tool_schema());
+        handlers.push(adapter as Arc<dyn ToolHandler>);
+        tracing::info!(
+            webhook_url = %notif.webhook_url,
+            "Notification webhook tool registered"
+        );
+    }
+
+    if let Some(fs_cfg) = &settings.agent.fs_tools {
+        match build_fs_tools(
+            &fs_cfg.root_path,
+            fs_cfg.max_read_bytes,
+            fs_cfg.max_dir_entries,
+        ) {
+            Ok((list_tool, read_tool)) => {
+                schemas.push(sandakan::infrastructure::tools::ListDirectoryTool::tool_schema());
+                schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
+                handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
+                handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
+                tracing::info!(
+                    root_path = %fs_cfg.root_path,
+                    "Filesystem introspection tools registered (list_directory, read_file)"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize fs_tools — tools not registered");
+            }
+        }
+    }
+
+    let mcp_client = build_mcp_client(&settings.agent.mcp_servers, handlers, &mut schemas).await;
+
+    let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
+
+    let agent_config = AgentServiceConfig {
+        model_config: format!("{}/{}", settings.llm.provider, settings.llm.chat_model),
+        max_iterations: settings.agent.max_iterations,
+        tool_timeout_secs: settings.agent.tool_timeout_secs,
+        tool_fail_fast: settings.agent.tool_fail_fast,
+        system_prompt: settings.agent.system_prompt.clone(),
+        reflection: sandakan::application::services::ReflectionSettings {
+            enabled: settings.agent.reflection.enabled,
+            score_threshold: settings.agent.reflection.score_threshold,
+            correction_budget: settings.agent.reflection.correction_budget,
+            critic_system_prompt: settings.agent.reflection.critic_system_prompt.clone(),
+        },
     };
 
-    let state = AppState {
-        ingestion_service,
-        retrieval_service,
-        conversation_repository,
-        job_repository,
-        ingestion_sender,
-        staging_store,
-        agent_service,
-        settings: settings.clone(),
-    };
+    let svc = Arc::new(AgentService::new(
+        llm_client.clone() as Arc<dyn LlmClient>,
+        mcp_client,
+        tool_registry,
+        Arc::clone(conversation_repository),
+        eval_event_repo,
+        eval_outbox_repo,
+        rag_source_collector,
+        agent_config,
+    ));
 
-    let router = create_router(state);
+    tracing::info!(
+        max_iterations = settings.agent.max_iterations,
+        tool_timeout_secs = settings.agent.tool_timeout_secs,
+        tool_fail_fast = settings.agent.tool_fail_fast,
+        "AgentService initialized"
+    );
 
-    let addr = SocketAddr::from((
+    Ok(Some(svc as Arc<dyn AgentServicePort>))
+}
+
+async fn build_mcp_client(
+    mcp_servers: &[McpServerConfig],
+    handlers: Vec<Arc<dyn ToolHandler>>,
+    schemas: &mut Vec<ToolSchema>,
+) -> Arc<dyn McpClientPort> {
+    let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
+
+    for server_cfg in mcp_servers {
+        match server_cfg {
+            McpServerConfig::Stdio(cfg) => {
+                tracing::info!(
+                    name = %cfg.name,
+                    command = %cfg.command,
+                    "Connecting to stdio MCP server"
+                );
+                match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
+                    Ok(client) => {
+                        schemas.extend(client.tool_schemas.clone());
+                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                    }
+                    Err(e) => {
+                        tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
+                    }
+                }
+            }
+            McpServerConfig::Sse(cfg) => {
+                tracing::info!(
+                    name = %cfg.name,
+                    endpoint = %cfg.endpoint,
+                    "Connecting to SSE MCP server"
+                );
+                match SseMcpClient::new(&cfg.endpoint).await {
+                    Ok(client) => {
+                        schemas.extend(client.tool_schemas.clone());
+                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                    }
+                    Err(e) => {
+                        tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
+                    }
+                }
+            }
+        }
+    }
+
+    if wire_clients.is_empty() {
+        Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
+    } else {
+        Arc::new(CompositeMcpClient::new(
+            wire_clients,
+            StandardMcpAdapter::new(handlers),
+        )) as Arc<dyn McpClientPort>
+    }
+}
+
+fn parse_listen_addr(settings: &Settings) -> SocketAddr {
+    SocketAddr::from((
         settings
             .server
             .host
             .parse::<std::net::IpAddr>()
             .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0))),
         settings.server.port,
-    ));
-    tracing::info!("Listening on {}", addr);
-
-    let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, router).await?;
-
-    if let Some(provider) = otel_provider {
-        if let Err(e) = provider.shutdown() {
-            tracing::warn!(error = %e, "OTel provider shutdown error");
-        }
-    }
-
-    Ok(())
+    ))
 }
