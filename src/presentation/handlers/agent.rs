@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::time::Duration;
 
-use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, VectorStore};
 use crate::application::services::AgentChatRequest;
 use crate::domain::ConversationId;
 use crate::infrastructure::observability::CorrelationId;
@@ -24,8 +24,8 @@ pub struct AgentChatRequestBody {
     skip(state, correlation_id, body),
     fields(message_len = body.message.len())
 )]
-pub async fn agent_chat_handler<F, L, V, T>(
-    State(state): State<AppState<F, L, V, T>>,
+pub async fn agent_chat_handler<F, L, V>(
+    State(state): State<AppState<F, L, V>>,
     Extension(correlation_id): Extension<CorrelationId>,
     Json(body): Json<AgentChatRequestBody>,
 ) -> impl IntoResponse
@@ -33,7 +33,6 @@ where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static + ?Sized,
 {
     let service = match &state.agent_service {
         Some(s) => s.clone(),

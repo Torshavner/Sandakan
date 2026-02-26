@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::time::Duration;
 
-use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, VectorStore};
 use crate::application::services::AgentChatRequest;
 use crate::domain::{ConversationId, Message, MessageRole};
 use crate::infrastructure::observability::{CorrelationId, sanitize_prompt};
@@ -50,8 +50,8 @@ fn should_use_agent(
     skip(state, correlation_id, request),
     fields(model = %request.model, streaming = ?request.stream)
 )]
-pub async fn chat_completions_handler<F, L, V, T>(
-    State(state): State<AppState<F, L, V, T>>,
+pub async fn chat_completions_handler<F, L, V>(
+    State(state): State<AppState<F, L, V>>,
     Extension(correlation_id): Extension<CorrelationId>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse
@@ -59,7 +59,6 @@ where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static + ?Sized,
 {
     let user_message = request
         .messages

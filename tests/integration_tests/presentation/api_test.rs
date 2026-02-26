@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use sandakan::application::ports::Embedder;
+use sandakan::application::ports::{Embedder, TextSplitter};
 use sandakan::application::services::{IngestionMessage, IngestionService, RetrievalService};
 use sandakan::infrastructure::llm::{MockEmbedder, MockLlmClient};
 use sandakan::infrastructure::persistence::{
@@ -130,7 +130,11 @@ fn create_test_app() -> axum::Router {
     let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+    let text_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
+    let markdown_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
         TEST_CHUNK_SIZE,
         TEST_CHUNK_OVERLAP,
     ));
@@ -139,7 +143,8 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter,
+        Arc::clone(&text_splitter),
+        Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
     ));
 
@@ -356,7 +361,11 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
     let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStoreLowScore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+    let text_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
+    let markdown_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
         TEST_CHUNK_SIZE,
         TEST_CHUNK_OVERLAP,
     ));
@@ -365,7 +374,8 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter,
+        Arc::clone(&text_splitter),
+        Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
     ));
 

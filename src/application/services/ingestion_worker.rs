@@ -19,12 +19,13 @@ pub struct IngestionMessage {
     pub delete_after_processing: bool,
 }
 
-pub struct IngestionWorker<F, V, T: ?Sized> {
+pub struct IngestionWorker<F, V> {
     receiver: mpsc::Receiver<IngestionMessage>,
     file_loader: Arc<F>,
     embedder: Arc<dyn Embedder>,
     vector_store: Arc<V>,
-    text_splitter: Arc<T>,
+    text_splitter: Arc<dyn TextSplitter>,
+    markdown_splitter: Arc<dyn TextSplitter>,
     job_repository: Arc<dyn JobRepository>,
     transcription_engine: Arc<dyn TranscriptionEngine>,
     staging_store: Arc<dyn StagingStore>,
@@ -33,11 +34,10 @@ pub struct IngestionWorker<F, V, T: ?Sized> {
     model_config: String,
 }
 
-impl<F, V, T: ?Sized> IngestionWorker<F, V, T>
+impl<F, V> IngestionWorker<F, V>
 where
     F: FileLoader + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -45,7 +45,8 @@ where
         file_loader: Arc<F>,
         embedder: Arc<dyn Embedder>,
         vector_store: Arc<V>,
-        text_splitter: Arc<T>,
+        text_splitter: Arc<dyn TextSplitter>,
+        markdown_splitter: Arc<dyn TextSplitter>,
         job_repository: Arc<dyn JobRepository>,
         transcription_engine: Arc<dyn TranscriptionEngine>,
         staging_store: Arc<dyn StagingStore>,
@@ -56,6 +57,7 @@ where
             embedder,
             vector_store,
             text_splitter,
+            markdown_splitter,
             job_repository,
             transcription_engine,
             staging_store,
@@ -226,7 +228,30 @@ where
 
                 chunks
             }
-            _ => {
+            ContentType::Pdf => {
+                self.update_status(job_id, JobStatus::Processing, None)
+                    .await?;
+                let text = self
+                    .file_loader
+                    .extract_text(&data, document)
+                    .await
+                    .map_err(IngestionWorkerError::FileLoading)?;
+
+                let chunks = self
+                    .markdown_splitter
+                    .split(&text, doc_id, Some(Arc::clone(&metadata)))
+                    .await
+                    .map_err(IngestionWorkerError::Splitting)?;
+
+                tracing::info!(
+                    ingestionText = text,
+                    ingestionMetadata = ?metadata,
+                    chunks = ?chunks,
+                    "Ingestion service done for pdf");
+
+                chunks
+            }
+            ContentType::Text => {
                 self.update_status(job_id, JobStatus::Processing, None)
                     .await?;
                 let text = self
@@ -245,7 +270,7 @@ where
                     ingestionText = text,
                     ingestionMetadata = ?metadata,
                     chunks = ?chunks,
-                    "Ingestion service done for pdf");
+                    "Ingestion service done for text");
 
                 chunks
             }

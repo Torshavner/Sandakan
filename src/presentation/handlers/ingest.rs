@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Serialize;
 
-use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, VectorStore};
 use crate::application::services::IngestionMessage;
 use crate::domain::{ContentType, DocumentId, Job, StoragePath};
 use crate::presentation::state::AppState;
@@ -21,15 +21,14 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-pub async fn ingest_handler<F, L, V, T>(
-    State(state): State<AppState<F, L, V, T>>,
+pub async fn ingest_handler<F, L, V>(
+    State(state): State<AppState<F, L, V>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static + ?Sized,
 {
     let mut field = match multipart.next_field().await {
         Ok(Some(f)) => f,

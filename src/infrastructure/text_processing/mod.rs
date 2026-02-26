@@ -27,7 +27,7 @@ pub use plain_text_adapter::PlainTextAdapter;
 pub use recursive_character_splitter::RecursiveCharacterSplitter;
 pub use semantic_splitter::SemanticSplitter;
 pub use text_sanitizer::sanitize_extracted_text;
-pub use text_splitter_factory::TextSplitterFactory;
+pub use text_splitter_factory::{TextSplitterFactory, TextSplitters};
 
 pub use local_vlm_pdf_adapter::EXTRACTION_TIMEOUT;
 pub use local_vlm_pdf_adapter::MAX_PAGES_DUE_TO_RAM_USAGE;

@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use futures::stream::StreamExt;
 use tower::ServiceExt;
 
-use sandakan::application::ports::{Embedder, LlmClient};
+use sandakan::application::ports::{Embedder, LlmClient, TextSplitter};
 use sandakan::application::services::IngestionMessage;
 use sandakan::application::services::{IngestionService, RetrievalService};
 use sandakan::infrastructure::llm::{MockEmbedder, create_streaming_llm_client};
@@ -140,13 +140,16 @@ fn create_ollama_test_app() -> axum::Router {
     let file_loader = Arc::new(MockFileLoader);
     let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let vector_store = Arc::new(MockVectorStore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(512, 50));
+    let text_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(512, 50));
+    let markdown_splitter: Arc<dyn TextSplitter> =
+        Arc::new(RecursiveCharacterSplitter::new(512, 50));
 
     let ingestion_service = Arc::new(IngestionService::new(
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter,
+        Arc::clone(&text_splitter),
+        Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
     ));
 

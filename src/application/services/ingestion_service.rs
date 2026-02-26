@@ -6,30 +6,30 @@ use crate::application::ports::{
 };
 use crate::domain::{ContentType, Document, DocumentId, DocumentMetadata, Job, JobStatus};
 
-pub struct IngestionService<F, V, T: ?Sized>
+pub struct IngestionService<F, V>
 where
     F: FileLoader,
     V: VectorStore,
-    T: TextSplitter,
 {
     file_loader: Arc<F>,
     embedder: Arc<dyn Embedder>,
     vector_store: Arc<V>,
-    text_splitter: Arc<T>,
+    text_splitter: Arc<dyn TextSplitter>,
+    markdown_splitter: Arc<dyn TextSplitter>,
     job_repository: Arc<dyn JobRepository>,
 }
 
-impl<F, V, T: ?Sized> IngestionService<F, V, T>
+impl<F, V> IngestionService<F, V>
 where
     F: FileLoader,
     V: VectorStore,
-    T: TextSplitter,
 {
     pub fn new(
         file_loader: Arc<F>,
         embedder: Arc<dyn Embedder>,
         vector_store: Arc<V>,
-        text_splitter: Arc<T>,
+        text_splitter: Arc<dyn TextSplitter>,
+        markdown_splitter: Arc<dyn TextSplitter>,
         job_repository: Arc<dyn JobRepository>,
     ) -> Self {
         Self {
@@ -37,6 +37,7 @@ where
             embedder,
             vector_store,
             text_splitter,
+            markdown_splitter,
             job_repository,
         }
     }
@@ -72,8 +73,12 @@ where
 
             let metadata = Arc::new(DocumentMetadata::from_document(&document, None));
 
-            let chunks = self
-                .text_splitter
+            let splitter = match content_type {
+                ContentType::Pdf => &self.markdown_splitter,
+                _ => &self.text_splitter,
+            };
+
+            let chunks = splitter
                 .split(&text, doc_id, Some(Arc::clone(&metadata)))
                 .await
                 .map_err(IngestionError::Splitting)?;

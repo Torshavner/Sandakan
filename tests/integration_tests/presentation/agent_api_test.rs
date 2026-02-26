@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use sandakan::application::ports::Embedder;
+use sandakan::application::ports::{Embedder, TextSplitter};
 use sandakan::application::services::{
     AgentChatRequest, AgentChatResponse, AgentError, AgentProgressEvent, AgentServicePort,
     IngestionMessage, IngestionService, RetrievalService,
@@ -164,7 +164,11 @@ fn create_test_app_with_agent(agent_service: Option<Arc<dyn AgentServicePort>>) 
     let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
     let llm_client = Arc::new(MockLlmClient);
     let vector_store = Arc::new(MockVectorStore);
-    let text_splitter = Arc::new(RecursiveCharacterSplitter::new(
+    let text_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
+        TEST_CHUNK_SIZE,
+        TEST_CHUNK_OVERLAP,
+    ));
+    let markdown_splitter: Arc<dyn TextSplitter> = Arc::new(RecursiveCharacterSplitter::new(
         TEST_CHUNK_SIZE,
         TEST_CHUNK_OVERLAP,
     ));
@@ -173,7 +177,8 @@ fn create_test_app_with_agent(agent_service: Option<Arc<dyn AgentServicePort>>) 
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter,
+        Arc::clone(&text_splitter),
+        Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
     ));
 

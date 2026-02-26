@@ -4,9 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
-use crate::application::ports::{
-    FileLoader, LlmClient, StagingStoreError, TextSplitter, VectorStore,
-};
+use crate::application::ports::{FileLoader, LlmClient, StagingStoreError, VectorStore};
 use crate::application::services::IngestionMessage;
 use crate::domain::{ContentType, Document, DocumentId, Job, StoragePath};
 use crate::presentation::handlers::ingest::{ErrorResponse, IngestResponse};
@@ -19,15 +17,14 @@ pub struct IngestReferenceRequest {
     pub content_type: String,
 }
 
-pub async fn ingest_reference_handler<F, L, V, T>(
-    State(state): State<AppState<F, L, V, T>>,
+pub async fn ingest_reference_handler<F, L, V>(
+    State(state): State<AppState<F, L, V>>,
     Json(body): Json<IngestReferenceRequest>,
 ) -> impl IntoResponse
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static + ?Sized,
 {
     let content_type = match ContentType::from_mime(&body.content_type) {
         Some(ct) => ct,

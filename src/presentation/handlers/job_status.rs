@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::application::ports::{FileLoader, LlmClient, TextSplitter, VectorStore};
+use crate::application::ports::{FileLoader, LlmClient, VectorStore};
 use crate::domain::JobId;
 use crate::presentation::state::AppState;
 
@@ -26,15 +26,14 @@ pub struct ErrorResponse {
 }
 
 #[tracing::instrument(skip(state))]
-pub async fn job_status_handler<F, L, V, T>(
-    State(state): State<AppState<F, L, V, T>>,
+pub async fn job_status_handler<F, L, V>(
+    State(state): State<AppState<F, L, V>>,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse
 where
     F: FileLoader + 'static,
     L: LlmClient + 'static,
     V: VectorStore + 'static,
-    T: TextSplitter + 'static + ?Sized,
 {
     let uuid = match Uuid::parse_str(&job_id) {
         Ok(u) => u,

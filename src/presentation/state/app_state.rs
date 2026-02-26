@@ -3,22 +3,20 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    ConversationRepository, FileLoader, JobRepository, LlmClient, StagingStore, TextSplitter,
-    VectorStore,
+    ConversationRepository, FileLoader, JobRepository, LlmClient, StagingStore, VectorStore,
 };
 use crate::application::services::{
     AgentServicePort, IngestionMessage, IngestionService, RetrievalService,
 };
 use crate::presentation::config::Settings;
 
-pub struct AppState<F, L, V, T: ?Sized>
+pub struct AppState<F, L, V>
 where
     F: FileLoader,
     L: LlmClient,
     V: VectorStore,
-    T: TextSplitter,
 {
-    pub ingestion_service: Arc<IngestionService<F, V, T>>,
+    pub ingestion_service: Arc<IngestionService<F, V>>,
     pub retrieval_service: Arc<RetrievalService<L, V>>,
     pub conversation_repository: Arc<dyn ConversationRepository>,
     pub job_repository: Arc<dyn JobRepository>,
@@ -28,12 +26,11 @@ where
     pub settings: Settings,
 }
 
-impl<F, L, V, T: ?Sized> Clone for AppState<F, L, V, T>
+impl<F, L, V> Clone for AppState<F, L, V>
 where
     F: FileLoader,
     L: LlmClient,
     V: VectorStore,
-    T: TextSplitter,
 {
     fn clone(&self) -> Self {
         Self {

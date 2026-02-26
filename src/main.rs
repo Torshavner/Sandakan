@@ -15,7 +15,7 @@ use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, Embedder, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, StagingStore,
-    TextSplitter, ToolSchema, TranscriptionEngine, VectorStore,
+    ToolSchema, TranscriptionEngine, VectorStore,
 };
 use sandakan::application::services::{
     AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
@@ -38,7 +38,7 @@ use sandakan::infrastructure::persistence::{
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
-    CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory,
+    CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory, TextSplitters,
 };
 use sandakan::infrastructure::tools::{
     InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let embedder = build_embedder(&settings)?;
     let llm_client = build_llm_client(&settings)?;
     let vector_store = build_vector_store(&settings).await?;
-    let text_splitter = build_text_splitter(&settings)?;
+    let splitters = build_text_splitters(&settings)?;
     let transcription_engine = build_transcription_engine(&settings)?;
     let staging_store = build_staging_store(&settings)?;
 
@@ -96,7 +96,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter.clone(),
+        Arc::clone(&splitters.text),
+        Arc::clone(&splitters.markdown),
         Arc::clone(&job_repository),
     ));
 
@@ -107,7 +108,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
         Arc::clone(&vector_store),
-        text_splitter,
+        splitters.text,
+        splitters.markdown,
         Arc::clone(&job_repository),
         transcription_engine,
         Arc::clone(&staging_store),
@@ -292,7 +294,7 @@ async fn build_vector_store(settings: &Settings) -> anyhow::Result<Arc<QdrantAda
     Ok(vector_store)
 }
 
-fn build_text_splitter(settings: &Settings) -> anyhow::Result<Arc<dyn TextSplitter>> {
+fn build_text_splitters(settings: &Settings) -> anyhow::Result<TextSplitters> {
     TextSplitterFactory::create(
         settings.chunking.strategy,
         settings.chunking.max_chunk_size,
@@ -378,7 +380,7 @@ fn build_eval_repos(
 #[allow(clippy::too_many_arguments)]
 fn spawn_workers(
     settings: &Settings,
-    ingestion_worker: IngestionWorker<CompositeFileLoader, QdrantAdapter, dyn TextSplitter>,
+    ingestion_worker: IngestionWorker<CompositeFileLoader, QdrantAdapter>,
     eval_event_repo: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repo: Option<Arc<dyn EvalOutboxRepository>>,
     embedder: &Arc<dyn Embedder>,
