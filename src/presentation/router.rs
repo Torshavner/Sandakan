@@ -33,7 +33,25 @@ where
         .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
-    let mut router = Router::new()
+    api_routes()
+        .merge(openai_compat_routes::<F, L, V, T>())
+        .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .layer(middleware::from_fn(correlation_id_middleware))
+        .layer(middleware::from_fn(request_id_middleware))
+        .layer(trace_layer)
+        .layer(cors)
+        .with_state(state)
+}
+
+/// Core API routes (health, ingestion, query, jobs, agent).
+fn api_routes<F, L, V, T>() -> Router<AppState<F, L, V, T>>
+where
+    F: FileLoader + 'static,
+    L: LlmClient + 'static,
+    V: VectorStore + 'static,
+    T: TextSplitter + 'static + ?Sized,
+{
+    Router::new()
         .route("/openapi.json", get(serve_openapi_spec))
         .route("/health", get(health_handler))
         .route("/api/v1/ingest", post(ingest_handler::<F, L, V, T>))
@@ -46,27 +64,23 @@ where
             "/api/v1/jobs/{job_id}",
             get(job_status_handler::<F, L, V, T>),
         )
+        .route("/api/v1/agent/chat", post(agent_chat_handler::<F, L, V, T>))
+}
+
+/// OpenAI-compatible routes (canonical `/v1/` paths + `/api/` aliases for Open WebUI).
+fn openai_compat_routes<F, L, V, T>() -> Router<AppState<F, L, V, T>>
+where
+    F: FileLoader + 'static,
+    L: LlmClient + 'static,
+    V: VectorStore + 'static,
+    T: TextSplitter + 'static + ?Sized,
+{
+    Router::new()
         .route("/v1/models", get(models_handler::<F, L, V, T>))
-        .route("/api/models", get(models_handler::<F, L, V, T>));
-
-    router = router
-        .route(
-            "/v1/chat/completions",
-            post(chat_completions_handler::<F, L, V, T>),
-        )
-        .route(
-            "/api/chat/completions",
-            post(chat_completions_handler::<F, L, V, T>),
-        )
-        .route("/api/v1/agent/chat", post(agent_chat_handler::<F, L, V, T>));
-
-    router
-        .layer(DefaultBodyLimit::max(max_upload_bytes))
-        .layer(middleware::from_fn(correlation_id_middleware))
-        .layer(middleware::from_fn(request_id_middleware))
-        .layer(trace_layer)
-        .layer(cors)
-        .with_state(state)
+        .route("/v1/chat/completions", post(chat_completions_handler::<F, L, V, T>))
+        // Open WebUI sends requests to /api/* instead of /v1/*
+        .route("/api/models", get(models_handler::<F, L, V, T>))
+        .route("/api/chat/completions", post(chat_completions_handler::<F, L, V, T>))
 }
 
 async fn serve_openapi_spec() -> impl IntoResponse {
