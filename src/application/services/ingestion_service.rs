@@ -85,6 +85,15 @@ where
             let contextual_strings: Vec<String> =
                 chunks.iter().map(|c| c.as_contextual_string()).collect();
             let texts: Vec<&str> = contextual_strings.iter().map(String::as_str).collect();
+
+            tracing::info!(
+                ingestionText = text,
+                ingestionMetadata = ?metadata,
+                chunks = ?chunks,
+                chunksWithContextuals = ?contextual_strings,
+                "Ingestion service done: text, chunking, metadata"
+            );
+
             let embeddings = self
                 .embedder
                 .embed_batch(&texts)

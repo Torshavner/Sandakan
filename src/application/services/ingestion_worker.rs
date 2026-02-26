@@ -213,10 +213,18 @@ where
                     "Transcription produced segments"
                 );
 
-                self.text_splitter
+                let chunks = self
+                    .text_splitter
                     .split_segments(&segments, doc_id, Some(Arc::clone(&metadata)))
                     .await
-                    .map_err(IngestionWorkerError::Splitting)?
+                    .map_err(IngestionWorkerError::Splitting)?;
+
+                tracing::info!(
+                        ingestionText = ?segments,
+                        chunks = ?chunks,
+                        "Ingestion service done for mp4: text, chunking, metadata");
+
+                chunks
             }
             _ => {
                 self.update_status(job_id, JobStatus::Processing, None)
@@ -227,10 +235,19 @@ where
                     .await
                     .map_err(IngestionWorkerError::FileLoading)?;
 
-                self.text_splitter
+                let chunks = self
+                    .text_splitter
                     .split(&text, doc_id, Some(Arc::clone(&metadata)))
                     .await
-                    .map_err(IngestionWorkerError::Splitting)?
+                    .map_err(IngestionWorkerError::Splitting)?;
+
+                tracing::info!(
+                    ingestionText = text,
+                    ingestionMetadata = ?metadata,
+                    chunks = ?chunks,
+                    "Ingestion service done for pdf");
+
+                chunks
             }
         };
 
@@ -241,6 +258,11 @@ where
         let contextual_strings: Vec<String> =
             chunks.iter().map(|c| c.as_contextual_string()).collect();
         let texts: Vec<&str> = contextual_strings.iter().map(String::as_str).collect();
+
+        tracing::info!(
+              contextual_strings = ?texts,
+                        "Ingestion service done contextual strings");
+
         let embeddings = self
             .embedder
             .embed_batch(&texts)

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -61,6 +63,10 @@ pub struct AudioExtractionSettings {
     pub azure_key: Option<String>,
     #[serde(default)]
     pub azure_api_version: Option<String>,
+    /// Phonetic correction map applied after local (Candle) transcription.
+    /// Keys are ASR artifacts (case-insensitive match), values are the correct terms.
+    #[serde(default)]
+    pub asr_corrections: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

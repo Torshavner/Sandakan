@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::application::ports::{AudioDecoder, TranscriptionEngine, TranscriptionError};
@@ -16,6 +17,7 @@ pub enum TranscriptionProvider {
 pub struct TranscriptionEngineFactory;
 
 impl TranscriptionEngineFactory {
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         provider: TranscriptionProvider,
         model: &str,
@@ -24,6 +26,7 @@ impl TranscriptionEngineFactory {
         azure_deployment: Option<String>,
         azure_api_version: Option<String>,
         decoder: Option<Arc<dyn AudioDecoder>>,
+        asr_corrections: HashMap<String, String>,
     ) -> Result<Arc<dyn TranscriptionEngine>, TranscriptionError> {
         match provider {
             TranscriptionProvider::Local => {
@@ -32,7 +35,7 @@ impl TranscriptionEngineFactory {
                         "AudioDecoder is required for the Local transcription provider".to_string(),
                     )
                 })?;
-                let engine = CandleWhisperEngine::new(model, decoder)?;
+                let engine = CandleWhisperEngine::new(model, decoder, asr_corrections)?;
                 Ok(Arc::new(engine))
             }
             TranscriptionProvider::OpenAi => {

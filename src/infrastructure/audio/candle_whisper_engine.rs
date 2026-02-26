@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,10 +20,16 @@ pub struct CandleWhisperEngine {
     device: Device,
     mel_filters: Vec<f32>,
     decoder: Arc<dyn AudioDecoder>,
+    /// Lowercased-key map of ASR artifact → correct term, applied post-decode.
+    asr_corrections: Vec<(String, String)>,
 }
 
 impl CandleWhisperEngine {
-    pub fn new(model_id: &str, decoder: Arc<dyn AudioDecoder>) -> Result<Self, TranscriptionError> {
+    pub fn new(
+        model_id: &str,
+        decoder: Arc<dyn AudioDecoder>,
+        asr_corrections: HashMap<String, String>,
+    ) -> Result<Self, TranscriptionError> {
         let device = Device::new_metal(0).unwrap_or(Device::Cpu);
 
         tracing::info!(
@@ -77,6 +84,13 @@ impl CandleWhisperEngine {
 
         tracing::info!("Candle Whisper engine loaded successfully");
 
+        // Sort longest artifact first so multi-word phrases match before their substrings.
+        let mut corrections: Vec<(String, String)> = asr_corrections
+            .into_iter()
+            .map(|(k, v)| (k.to_lowercase(), v))
+            .collect();
+        corrections.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
         Ok(Self {
             model: Mutex::new(model),
             tokenizer,
@@ -84,11 +98,65 @@ impl CandleWhisperEngine {
             device,
             mel_filters,
             decoder,
+            asr_corrections: corrections,
         })
     }
 
     pub fn select_dtype(_device: &Device) -> DType {
         DType::F32
+    }
+
+    /// Apply the ASR correction dictionary to a decoded text segment.
+    /// Matching is case-insensitive on word boundaries; replacement uses the configured casing.
+    /// Corrections are pre-sorted longest-first so multi-word phrases win over substrings.
+    fn apply_corrections(&self, text: &str) -> String {
+        if self.asr_corrections.is_empty() {
+            return text.to_string();
+        }
+
+        let lower = text.to_lowercase();
+        let bytes = lower.as_bytes();
+        let len = bytes.len();
+
+        // Collect (start, end, replacement) for every word-boundary match.
+        let mut matches: Vec<(usize, usize, &str)> = Vec::new();
+        for (artifact, correction) in &self.asr_corrections {
+            let art = artifact.as_bytes();
+            let art_len = art.len();
+            let mut pos = 0;
+            while pos + art_len <= len {
+                if bytes[pos..pos + art_len] == *art {
+                    let before_ok = pos == 0 || !bytes[pos - 1].is_ascii_alphabetic();
+                    let after_ok =
+                        pos + art_len == len || !bytes[pos + art_len].is_ascii_alphabetic();
+                    if before_ok && after_ok {
+                        matches.push((pos, pos + art_len, correction.as_str()));
+                        pos += art_len;
+                        continue;
+                    }
+                }
+                pos += 1;
+            }
+        }
+
+        if matches.is_empty() {
+            return text.to_string();
+        }
+
+        // Sort by start position; skip overlapping matches.
+        matches.sort_by_key(|&(start, _, _)| start);
+        let mut out = String::with_capacity(text.len());
+        let mut last_end = 0usize;
+        for (start, end, replacement) in matches {
+            if start < last_end {
+                continue;
+            }
+            out.push_str(&text[last_end..start]);
+            out.push_str(replacement);
+            last_end = end;
+        }
+        out.push_str(&text[last_end..]);
+        out
     }
 }
 
@@ -146,7 +214,8 @@ impl TranscriptionEngine for CandleWhisperEngine {
         let mut segments: Vec<TranscriptSegment> = Vec::new();
 
         for (i, mel_tensor) in pending {
-            let text = decode_segment(&mut model, &self.tokenizer, &self.device, &mel_tensor)?;
+            let raw = decode_segment(&mut model, &self.tokenizer, &self.device, &mel_tensor)?;
+            let text = self.apply_corrections(&raw);
 
             tracing::debug!(segment = i, "Transcribed audio segment");
 

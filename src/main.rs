@@ -331,6 +331,7 @@ fn build_transcription_engine(settings: &Settings) -> anyhow::Result<Arc<dyn Tra
         settings.extraction.audio.azure_deployment.clone(),
         settings.extraction.audio.azure_api_version.clone(),
         audio_decoder,
+        settings.extraction.audio.asr_corrections.clone(),
     )
     .expect("Failed to initialize transcription engine");
 

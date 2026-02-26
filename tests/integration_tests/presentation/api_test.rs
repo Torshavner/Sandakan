@@ -98,6 +98,7 @@ fn test_settings() -> Settings {
                 azure_deployment: None,
                 azure_key: None,
                 azure_api_version: None,
+                asr_corrections: Default::default(),
             },
             video: VideoExtractionSettings {
                 enabled: true,
