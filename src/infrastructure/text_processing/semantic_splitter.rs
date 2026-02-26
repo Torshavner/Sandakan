@@ -26,7 +26,7 @@ impl SemanticSplitter {
         })
     }
 
-    fn count_tokens(&self, text: &str) -> usize {
+    pub(super) fn count_tokens(&self, text: &str) -> usize {
         self.tokenizer.encode_with_special_tokens(text).len()
     }
 
@@ -66,7 +66,7 @@ impl SemanticSplitter {
     /// Splits a sentence that exceeds `max_tokens` by slicing the token array
     /// (O(1) tokenizations). Decoding token sub-slices preserves all content
     /// without data loss because every token ID maps back to exactly one string.
-    fn split_oversized_sentence(&self, sentence: &str) -> Vec<String> {
+    pub(super) fn split_oversized_sentence(&self, sentence: &str) -> Vec<String> {
         let tokens = self.tokenizer.encode_with_special_tokens(sentence);
         let mut sub_chunks = Vec::with_capacity(tokens.len() / self.max_tokens + 1);
         let mut token_offset = 0;
@@ -86,7 +86,7 @@ impl SemanticSplitter {
 
     /// Merges sentences into chunks that stay within `max_tokens`, with overlap.
     /// Short paragraphs / sentences are merged together when they fit.
-    fn merge_sentences_into_chunks(
+    pub(super) fn merge_sentences_into_chunks(
         &self,
         sentences: &[&str],
     ) -> Result<Vec<String>, TextSplitterError> {
@@ -155,6 +155,85 @@ impl SemanticSplitter {
 
                 if overlap_start < chunk_end {
                     idx = overlap_start + 1;
+                }
+            }
+        }
+
+        Ok(chunks)
+    }
+
+    /// Groups timed transcript segments into token-budgeted chunks (sync helper).
+    ///
+    /// Extracted so `MarkdownSemanticSplitter` can delegate without duplicating logic.
+    pub(super) fn split_segments_impl(
+        &self,
+        segments: &[TranscriptSegment],
+        document_id: DocumentId,
+        metadata: Option<Arc<DocumentMetadata>>,
+    ) -> Result<Vec<Chunk>, TextSplitterError> {
+        if segments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut seg_idx = 0;
+
+        while seg_idx < segments.len() {
+            let chunk_start_time = segments[seg_idx].start_time;
+            let mut current_text = segments[seg_idx].text.trim().to_string();
+            let mut current_tokens = self.count_tokens(&current_text);
+            let chunk_start_idx = seg_idx;
+            seg_idx += 1;
+
+            while seg_idx < segments.len() {
+                let next_text = segments[seg_idx].text.trim();
+                let next_tokens = self.count_tokens(next_text);
+                let separator = if current_text.is_empty() { 0 } else { 1 };
+
+                if current_tokens + separator + next_tokens > self.max_tokens {
+                    break;
+                }
+
+                if !current_text.is_empty() {
+                    current_text.push(' ');
+                }
+                current_text.push_str(next_text);
+                current_tokens += separator + next_tokens;
+                seg_idx += 1;
+            }
+
+            if current_text.is_empty() {
+                continue;
+            }
+
+            let chunk = match &metadata {
+                Some(meta) => Chunk::with_metadata(
+                    current_text,
+                    document_id,
+                    None,
+                    chunk_start_idx,
+                    Arc::clone(meta),
+                )
+                .with_start_time(chunk_start_time),
+                None => Chunk::new(current_text, document_id, None, chunk_start_idx)
+                    .with_start_time(chunk_start_time),
+            };
+            chunks.push(chunk);
+
+            if seg_idx < segments.len() && self.overlap_tokens > 0 {
+                let chunk_end_idx = seg_idx - 1;
+                let mut overlap_acc = 0;
+                let mut overlap_start = chunk_end_idx;
+
+                while overlap_start > chunk_start_idx && overlap_acc < self.overlap_tokens {
+                    overlap_acc += self.count_tokens(segments[overlap_start].text.trim());
+                    if overlap_start > chunk_start_idx {
+                        overlap_start -= 1;
+                    }
+                }
+
+                if overlap_start < chunk_end_idx {
+                    seg_idx = overlap_start + 1;
                 }
             }
         }
@@ -235,85 +314,12 @@ impl TextSplitter for SemanticSplitter {
         Ok(all_chunks)
     }
 
-    /// Groups timed transcript segments into token-budgeted chunks.
-    ///
-    /// Groups consecutive segments until the token budget is reached; the first segment's
-    /// `start_time` is recorded on the chunk for deep-link citation (e.g. `?t=45s`).
     async fn split_segments(
         &self,
         segments: &[TranscriptSegment],
         document_id: DocumentId,
         metadata: Option<Arc<DocumentMetadata>>,
     ) -> Result<Vec<Chunk>, TextSplitterError> {
-        if segments.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut chunks: Vec<Chunk> = Vec::new();
-        let mut seg_idx = 0;
-
-        while seg_idx < segments.len() {
-            let chunk_start_time = segments[seg_idx].start_time;
-            let mut current_text = segments[seg_idx].text.trim().to_string();
-            let mut current_tokens = self.count_tokens(&current_text);
-            let chunk_start_idx = seg_idx;
-            seg_idx += 1;
-
-            // Accumulate segments until we exceed the token budget.
-            while seg_idx < segments.len() {
-                let next_text = segments[seg_idx].text.trim();
-                let next_tokens = self.count_tokens(next_text);
-                let separator = if current_text.is_empty() { 0 } else { 1 };
-
-                if current_tokens + separator + next_tokens > self.max_tokens {
-                    break;
-                }
-
-                if !current_text.is_empty() {
-                    current_text.push(' ');
-                }
-                current_text.push_str(next_text);
-                current_tokens += separator + next_tokens;
-                seg_idx += 1;
-            }
-
-            if current_text.is_empty() {
-                continue;
-            }
-
-            let chunk = match &metadata {
-                Some(meta) => Chunk::with_metadata(
-                    current_text,
-                    document_id,
-                    None,
-                    chunk_start_idx,
-                    Arc::clone(meta),
-                )
-                .with_start_time(chunk_start_time),
-                None => Chunk::new(current_text, document_id, None, chunk_start_idx)
-                    .with_start_time(chunk_start_time),
-            };
-            chunks.push(chunk);
-
-            // Overlap: step back by overlap_tokens worth of segments.
-            if seg_idx < segments.len() && self.overlap_tokens > 0 {
-                let chunk_end_idx = seg_idx - 1;
-                let mut overlap_acc = 0;
-                let mut overlap_start = chunk_end_idx;
-
-                while overlap_start > chunk_start_idx && overlap_acc < self.overlap_tokens {
-                    overlap_acc += self.count_tokens(segments[overlap_start].text.trim());
-                    if overlap_start > chunk_start_idx {
-                        overlap_start -= 1;
-                    }
-                }
-
-                if overlap_start < chunk_end_idx {
-                    seg_idx = overlap_start + 1;
-                }
-            }
-        }
-
-        Ok(chunks)
+        self.split_segments_impl(segments, document_id, metadata)
     }
 }

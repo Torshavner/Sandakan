@@ -77,10 +77,16 @@ where
 {
     Router::new()
         .route("/v1/models", get(models_handler::<F, L, V, T>))
-        .route("/v1/chat/completions", post(chat_completions_handler::<F, L, V, T>))
+        .route(
+            "/v1/chat/completions",
+            post(chat_completions_handler::<F, L, V, T>),
+        )
         // Open WebUI sends requests to /api/* instead of /v1/*
         .route("/api/models", get(models_handler::<F, L, V, T>))
-        .route("/api/chat/completions", post(chat_completions_handler::<F, L, V, T>))
+        .route(
+            "/api/chat/completions",
+            post(chat_completions_handler::<F, L, V, T>),
+        )
 }
 
 async fn serve_openapi_spec() -> impl IntoResponse {

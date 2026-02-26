@@ -3,6 +3,7 @@ mod composite_file_loader_test;
 mod extractor_factory_test;
 mod lm_studio_vlm_pdf_adapter_test;
 mod local_vlm_pdf_adapters_test;
+mod markdown_splitter_test;
 mod plain_text_adapter_test;
 mod text_sanitizer_test;
 mod text_splitter;
