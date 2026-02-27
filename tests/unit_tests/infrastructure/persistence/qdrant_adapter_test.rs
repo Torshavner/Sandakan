@@ -51,6 +51,7 @@ fn given_collection_config_when_customized_then_stores_custom_values() {
             field_name: "custom_field".to_string(),
             field_type: PayloadFieldType::Integer,
         }],
+        hybrid: false,
     };
 
     assert_eq!(config.vector_dimensions, 768);

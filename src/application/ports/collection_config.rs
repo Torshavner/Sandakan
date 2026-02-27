@@ -5,6 +5,7 @@ pub struct CollectionConfig {
     pub vector_dimensions: u64,
     pub distance_metric: DistanceMetric,
     pub payload_indexes: Vec<PayloadIndex>,
+    pub hybrid: bool,
 }
 
 impl CollectionConfig {
@@ -26,6 +27,12 @@ impl CollectionConfig {
                     field_type: PayloadFieldType::Keyword,
                 },
             ],
+            hybrid: false,
         }
+    }
+
+    pub fn with_hybrid(mut self) -> Self {
+        self.hybrid = true;
+        self
     }
 }

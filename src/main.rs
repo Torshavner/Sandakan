@@ -14,8 +14,8 @@ use sandakan::application::ports::RagSourceCollector;
 use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, Embedder, EvalEventRepository,
-    EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient, StagingStore,
-    ToolSchema, TranscriptionEngine, VectorStore,
+    EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient,
+    SparseEmbedder, StagingStore, ToolSchema, TranscriptionEngine, VectorStore,
 };
 use sandakan::application::services::{
     AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
@@ -38,7 +38,8 @@ use sandakan::infrastructure::persistence::{
 };
 use sandakan::infrastructure::storage::StagingStoreFactory;
 use sandakan::infrastructure::text_processing::{
-    CompositeFileLoader, ExtractorFactory, PlainTextAdapter, TextSplitterFactory, TextSplitters,
+    Bm25SparseEmbedder, CompositeFileLoader, ExtractorFactory, PlainTextAdapter,
+    TextSplitterFactory, TextSplitters,
 };
 use sandakan::infrastructure::tools::{
     InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
@@ -75,6 +76,12 @@ async fn main() -> anyhow::Result<()> {
     let transcription_engine = build_transcription_engine(&settings)?;
     let staging_store = build_staging_store(&settings)?;
 
+    let sparse_embedder: Option<Arc<dyn SparseEmbedder>> = if settings.qdrant.hybrid_search {
+        Some(Arc::new(Bm25SparseEmbedder::new()))
+    } else {
+        None
+    };
+
     let (eval_event_repo, eval_outbox_repo) = build_eval_repos(&settings, &pg_pool);
     let model_config = format!("{}/{}", settings.llm.provider, settings.llm.chat_model);
 
@@ -85,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&conversation_repository),
         eval_event_repo.clone(),
         eval_outbox_repo.clone(),
+        sparse_embedder.clone(),
         model_config.clone(),
         settings.rag.top_k,
         settings.rag.similarity_threshold,
@@ -99,11 +107,12 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&splitters.text),
         Arc::clone(&splitters.markdown),
         Arc::clone(&job_repository),
+        sparse_embedder.clone(),
     ));
 
     let (ingestion_sender, ingestion_receiver) = mpsc::channel(INGESTION_CHANNEL_CAPACITY);
 
-    let ingestion_worker = IngestionWorker::new(
+    let mut ingestion_worker = IngestionWorker::new(
         ingestion_receiver,
         Arc::clone(&file_loader),
         Arc::clone(&embedder),
@@ -114,6 +123,9 @@ async fn main() -> anyhow::Result<()> {
         transcription_engine,
         Arc::clone(&staging_store),
     );
+    if let Some(sparse) = sparse_embedder {
+        ingestion_worker = ingestion_worker.with_sparse_embedder(sparse);
+    }
 
     let agent_eval_event_repo = eval_event_repo.clone();
     let agent_eval_outbox_repo = eval_outbox_repo.clone();
@@ -264,7 +276,11 @@ async fn build_vector_store(settings: &Settings) -> anyhow::Result<Arc<QdrantAda
         .expect("Failed to connect to Qdrant"),
     );
 
-    let collection_config = CollectionConfig::new(settings.embeddings.dimension as u64);
+    let mut collection_config = CollectionConfig::new(settings.embeddings.dimension as u64);
+    if settings.qdrant.hybrid_search {
+        collection_config = collection_config.with_hybrid();
+        tracing::info!("Hybrid search enabled — collection will use dense + sparse vectors");
+    }
 
     match vector_store.get_collection_vector_size().await {
         Ok(Some(existing_size)) => {
@@ -274,7 +290,41 @@ async fn build_vector_store(settings: &Settings) -> anyhow::Result<Arc<QdrantAda
                     existing_size, collection_config.vector_dimensions
                 );
             }
-            tracing::info!(dimension = existing_size, "Collection dimension validated");
+
+            let is_hybrid = vector_store.is_hybrid_collection().await.unwrap_or(false);
+            if collection_config.hybrid && !is_hybrid {
+                tracing::warn!(
+                    "Hybrid search enabled but collection uses dense-only schema — recreating"
+                );
+                vector_store
+                    .delete_collection()
+                    .await
+                    .expect("Failed to delete incompatible collection");
+                vector_store
+                    .create_collection(&collection_config)
+                    .await
+                    .expect("Failed to recreate collection with hybrid schema");
+                tracing::info!("Collection recreated with hybrid (dense + sparse) vectors");
+            } else if !collection_config.hybrid && is_hybrid {
+                tracing::warn!(
+                    "Hybrid search disabled but collection uses hybrid schema — recreating"
+                );
+                vector_store
+                    .delete_collection()
+                    .await
+                    .expect("Failed to delete incompatible collection");
+                vector_store
+                    .create_collection(&collection_config)
+                    .await
+                    .expect("Failed to recreate collection with dense-only schema");
+                tracing::info!("Collection recreated with dense-only vectors");
+            } else {
+                tracing::info!(
+                    dimension = existing_size,
+                    hybrid = is_hybrid,
+                    "Collection validated"
+                );
+            }
         }
         Ok(None) => {
             vector_store

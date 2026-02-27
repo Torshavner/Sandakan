@@ -4,8 +4,8 @@ use tokio::sync::mpsc;
 use tracing::Instrument;
 
 use crate::application::ports::{
-    Embedder, EvalEventRepository, EvalOutboxRepository, FileLoader, JobRepository, StagingStore,
-    TextSplitter, TranscriptionEngine, VectorStore,
+    Embedder, EvalEventRepository, EvalOutboxRepository, FileLoader, JobRepository, SparseEmbedder,
+    StagingStore, TextSplitter, TranscriptionEngine, VectorStore,
 };
 use crate::domain::{
     ContentType, Document, DocumentMetadata, EvalEvent, EvalOperationType, JobId, JobStatus,
@@ -29,6 +29,7 @@ pub struct IngestionWorker<F, V> {
     job_repository: Arc<dyn JobRepository>,
     transcription_engine: Arc<dyn TranscriptionEngine>,
     staging_store: Arc<dyn StagingStore>,
+    sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
     eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
     model_config: String,
@@ -61,6 +62,7 @@ where
             job_repository,
             transcription_engine,
             staging_store,
+            sparse_embedder: None,
             eval_event_repository: None,
             eval_outbox_repository: None,
             model_config: String::new(),
@@ -76,6 +78,11 @@ where
         self.eval_event_repository = Some(eval_event_repository);
         self.eval_outbox_repository = Some(eval_outbox_repository);
         self.model_config = model_config.to_string();
+        self
+    }
+
+    pub fn with_sparse_embedder(mut self, sparse_embedder: Arc<dyn SparseEmbedder>) -> Self {
+        self.sparse_embedder = Some(sparse_embedder);
         self
     }
 
@@ -264,10 +271,21 @@ where
             .await
             .map_err(IngestionWorkerError::Embedding)?;
 
-        self.vector_store
-            .upsert(&chunks, &embeddings)
-            .await
-            .map_err(IngestionWorkerError::VectorStore)?;
+        if let Some(sparse) = &self.sparse_embedder {
+            let sparse_embeddings = sparse
+                .embed_sparse_batch(&texts)
+                .await
+                .map_err(IngestionWorkerError::Embedding)?;
+            self.vector_store
+                .upsert_hybrid(&chunks, &embeddings, &sparse_embeddings)
+                .await
+                .map_err(IngestionWorkerError::VectorStore)?;
+        } else {
+            self.vector_store
+                .upsert(&chunks, &embeddings)
+                .await
+                .map_err(IngestionWorkerError::VectorStore)?;
+        }
 
         Ok(chunks.len())
     }

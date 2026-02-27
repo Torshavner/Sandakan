@@ -23,7 +23,7 @@ pub use conversation::Conversation;
 pub use conversation_id::ConversationId;
 pub use document::{ContentType, Document};
 pub use document_metadata::DocumentMetadata;
-pub use embedding::Embedding;
+pub use embedding::{Embedding, SparseEmbedding};
 pub use eval_entry::EvalEntry;
 pub use eval_event::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
 pub use eval_outbox::{EvalOutboxEntry, EvalOutboxStatus};

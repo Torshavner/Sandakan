@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::ports::{
     Embedder, EmbedderError, FileLoader, FileLoaderError, JobRepository, RepositoryError,
-    TextSplitter, TextSplitterError, VectorStore, VectorStoreError,
+    SparseEmbedder, TextSplitter, TextSplitterError, VectorStore, VectorStoreError,
 };
 use crate::domain::{ContentType, Document, DocumentId, DocumentMetadata, Job, JobStatus};
 
@@ -17,6 +17,7 @@ where
     text_splitter: Arc<dyn TextSplitter>,
     markdown_splitter: Arc<dyn TextSplitter>,
     job_repository: Arc<dyn JobRepository>,
+    sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
 }
 
 impl<F, V> IngestionService<F, V>
@@ -31,6 +32,7 @@ where
         text_splitter: Arc<dyn TextSplitter>,
         markdown_splitter: Arc<dyn TextSplitter>,
         job_repository: Arc<dyn JobRepository>,
+        sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
     ) -> Self {
         Self {
             file_loader,
@@ -39,6 +41,7 @@ where
             text_splitter,
             markdown_splitter,
             job_repository,
+            sparse_embedder,
         }
     }
 
@@ -105,10 +108,21 @@ where
                 .await
                 .map_err(IngestionError::Embedding)?;
 
-            self.vector_store
-                .upsert(&chunks, &embeddings)
-                .await
-                .map_err(IngestionError::Storage)?;
+            if let Some(sparse) = &self.sparse_embedder {
+                let sparse_embeddings = sparse
+                    .embed_sparse_batch(&texts)
+                    .await
+                    .map_err(IngestionError::Embedding)?;
+                self.vector_store
+                    .upsert_hybrid(&chunks, &embeddings, &sparse_embeddings)
+                    .await
+                    .map_err(IngestionError::Storage)?;
+            } else {
+                self.vector_store
+                    .upsert(&chunks, &embeddings)
+                    .await
+                    .map_err(IngestionError::Storage)?;
+            }
 
             Ok(doc_id)
         }

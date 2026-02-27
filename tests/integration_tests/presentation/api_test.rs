@@ -36,6 +36,7 @@ fn test_settings() -> Settings {
         qdrant: QdrantSettings {
             url: "http://localhost:6334".to_string(),
             collection_name: "test".to_string(),
+            hybrid_search: false,
         },
         database: DatabaseSettings {
             url: "postgres://test".to_string(),
@@ -146,6 +147,7 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&text_splitter),
         Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
+        None,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
@@ -153,6 +155,7 @@ fn create_test_app() -> axum::Router {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::new(MockConversationRepository),
+        None,
         None,
         None,
         "test/mock-model".to_string(),
@@ -377,6 +380,7 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&text_splitter),
         Arc::clone(&markdown_splitter),
         Arc::new(MockJobRepository),
+        None,
     ));
 
     let retrieval_service = Arc::new(RetrievalService::new(
@@ -384,6 +388,7 @@ async fn given_low_similarity_when_chat_completions_then_returns_fallback() {
         Arc::clone(&llm_client),
         Arc::clone(&vector_store),
         Arc::new(MockConversationRepository),
+        None,
         None,
         None,
         "test/mock-model".to_string(),

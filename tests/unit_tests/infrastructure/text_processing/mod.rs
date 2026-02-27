@@ -1,4 +1,5 @@
 mod azure_doc_intel_adapter_test;
+mod bm25_sparse_embedder_test;
 mod composite_file_loader_test;
 mod extractor_factory_test;
 mod lm_studio_vlm_pdf_adapter_test;

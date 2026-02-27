@@ -77,12 +77,10 @@ impl LocalCandleEmbedder {
         Device::new_metal(0).unwrap_or(Device::Cpu)
     }
 
-    pub fn select_dtype(device: &Device) -> DType {
-        if device.is_cpu() {
-            DType::F32
-        } else {
-            DType::F16
-        }
+    pub fn select_dtype(_device: &Device) -> DType {
+        // Always use F32 — F16 causes NaN overflow in BERT attention/layernorm
+        // on Metal, and the perf difference is negligible for embedding models.
+        DType::F32
     }
 
     fn encode_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedderError> {
@@ -172,6 +170,12 @@ impl LocalCandleEmbedder {
 }
 
 fn l2_normalize(v: &mut [f32]) {
+    // Replace any NaN/Inf values from model output before normalization
+    for x in v.iter_mut() {
+        if !x.is_finite() {
+            *x = 0.0;
+        }
+    }
     let length: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if length > 0.0 {
         v.iter_mut().for_each(|x| *x /= length);

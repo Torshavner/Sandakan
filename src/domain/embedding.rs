@@ -34,3 +34,26 @@ impl Embedding {
         dot_product / (magnitude_a * magnitude_b)
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparseEmbedding {
+    pub indices: Vec<u32>,
+    pub values: Vec<f32>,
+}
+
+impl SparseEmbedding {
+    pub fn new(mut pairs: Vec<(u32, f32)>) -> Self {
+        pairs.sort_unstable_by_key(|(idx, _)| *idx);
+        pairs.dedup_by_key(|(idx, _)| *idx);
+        let (indices, values) = pairs.into_iter().unzip();
+        Self { indices, values }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.indices.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.indices.len()
+    }
+}

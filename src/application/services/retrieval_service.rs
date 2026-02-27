@@ -3,9 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::Instrument;
 
+use crate::application::ports::SearchResult;
 use crate::application::ports::{
     ConversationRepository, Embedder, EvalEventRepository, EvalOutboxRepository, LlmClient,
-    LlmTokenStream, RetrievalError, RetrievalServicePort, SourceChunk, VectorStore,
+    LlmTokenStream, RetrievalError, RetrievalServicePort, SourceChunk, SparseEmbedder, VectorStore,
 };
 use crate::application::services::count_tokens;
 use crate::domain::{ConversationId, EvalEvent, EvalSource, Message, MessageRole};
@@ -21,6 +22,7 @@ where
     conversation_repository: Arc<dyn ConversationRepository>,
     eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+    sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
     model_config: String,
     top_k: usize,
     similarity_threshold: f32,
@@ -41,6 +43,7 @@ where
         conversation_repository: Arc<dyn ConversationRepository>,
         eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
         eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+        sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
         model_config: String,
         top_k: usize,
         similarity_threshold: f32,
@@ -54,11 +57,36 @@ where
             conversation_repository,
             eval_event_repository,
             eval_outbox_repository,
+            sparse_embedder,
             model_config,
             top_k,
             similarity_threshold,
             max_context_tokens,
             fallback_message,
+        }
+    }
+
+    async fn vector_search(&self, query: &str) -> Result<Vec<SearchResult>, RetrievalError> {
+        let query_embedding = self
+            .embedder
+            .embed(query)
+            .await
+            .map_err(RetrievalError::Embedding)?;
+
+        if let Some(sparse) = &self.sparse_embedder {
+            let sparse_embedding = sparse
+                .embed_sparse(query)
+                .await
+                .map_err(RetrievalError::Embedding)?;
+            self.vector_store
+                .search_hybrid(&query_embedding, &sparse_embedding, self.top_k)
+                .await
+                .map_err(RetrievalError::Search)
+        } else {
+            self.vector_store
+                .search(&query_embedding, self.top_k)
+                .await
+                .map_err(RetrievalError::Search)
         }
     }
 
@@ -72,17 +100,7 @@ where
         conversation_id: Option<ConversationId>,
         correlation_id: Option<String>,
     ) -> Result<QueryResponse, RetrievalError> {
-        let query_embedding = self
-            .embedder
-            .embed(question)
-            .await
-            .map_err(RetrievalError::Embedding)?;
-
-        let results = self
-            .vector_store
-            .search(&query_embedding, self.top_k)
-            .await
-            .map_err(RetrievalError::Search)?;
+        let results = self.vector_search(question).await?;
 
         if results.is_empty()
             || results
@@ -216,17 +234,7 @@ where
         question: &str,
         conversation_id: Option<ConversationId>,
     ) -> Result<StreamingQueryResponse, RetrievalError> {
-        let query_embedding = self
-            .embedder
-            .embed(question)
-            .await
-            .map_err(RetrievalError::Embedding)?;
-
-        let results = self
-            .vector_store
-            .search(&query_embedding, self.top_k)
-            .await
-            .map_err(RetrievalError::Search)?;
+        let results = self.vector_search(question).await?;
 
         if results.is_empty()
             || results
@@ -310,17 +318,7 @@ where
     }
 
     pub async fn search_chunks(&self, query: &str) -> Result<Vec<SourceChunk>, RetrievalError> {
-        let query_embedding = self
-            .embedder
-            .embed(query)
-            .await
-            .map_err(RetrievalError::Embedding)?;
-
-        let results = self
-            .vector_store
-            .search(&query_embedding, self.top_k)
-            .await
-            .map_err(RetrievalError::Search)?;
+        let results = self.vector_search(query).await?;
 
         if results.is_empty()
             || results

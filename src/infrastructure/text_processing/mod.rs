@@ -1,4 +1,5 @@
 mod azure_doc_intel_adapter;
+mod bm25_sparse_embedder;
 mod composite_file_loader;
 mod extractor_factory;
 mod lm_studio_vlm_pdf_adapter;
@@ -16,6 +17,7 @@ pub use azure_doc_intel_adapter::AnalyzeResponse;
 pub use azure_doc_intel_adapter::AnalyzeResult;
 pub use azure_doc_intel_adapter::AzureDocIntelAdapter;
 
+pub use bm25_sparse_embedder::Bm25SparseEmbedder;
 pub use composite_file_loader::CompositeFileLoader;
 pub use extractor_factory::{ExtractorFactory, ExtractorFactoryError};
 pub use lm_studio_vlm_pdf_adapter::LmStudioVlmPdfAdapter;

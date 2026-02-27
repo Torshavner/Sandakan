@@ -4,4 +4,6 @@ use serde::Deserialize;
 pub struct QdrantSettings {
     pub url: String,
     pub collection_name: String,
+    #[serde(default)]
+    pub hybrid_search: bool,
 }
