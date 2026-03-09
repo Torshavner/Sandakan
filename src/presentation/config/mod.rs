@@ -3,11 +3,11 @@ mod settings;
 
 pub use environment::Environment;
 pub use settings::{
-    AgentSettings, AudioExtractionSettings, ChatMode, ChunkingSettings, ChunkingStrategy,
-    DatabaseSettings, EmbeddingProvider, EmbeddingsSettings, EvalSettings, ExtractionSettings,
-    ExtractorProvider, FsToolSettings, LlmSettings, LoggingSettings, McpServerConfig,
-    NotificationFormatSetting, NotificationSettings, PdfExtractionSettings, QdrantSettings,
-    RagSettings, ReflectionSettings, ServerSettings, Settings, SseMcpServerConfig,
+    AgentServiceConfig, AgentSettings, AudioExtractionSettings, ChatMode, ChunkingSettings,
+    ChunkingStrategy, DatabaseSettings, EmbeddingProvider, EmbeddingsSettings, EvalSettings,
+    ExtractionSettings, ExtractorProvider, FsToolSettings, LlmSettings, LoggingSettings,
+    McpServerConfig, NotificationFormatSetting, NotificationSettings, PdfExtractionSettings,
+    QdrantSettings, RagSettings, ReflectionSettings, ServerSettings, Settings, SseMcpServerConfig,
     StdioMcpServerConfig, StorageProviderSetting, StorageSettings, TranscriptionProviderSetting,
     VideoExtractionSettings, WebSearchSettings,
 };

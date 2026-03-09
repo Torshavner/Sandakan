@@ -9,13 +9,12 @@ use sandakan::application::ports::{
     ToolSchema,
 };
 use sandakan::application::services::{
-    AgentChatRequest, AgentError, AgentProgressEvent, AgentService, AgentServiceConfig,
-    AgentServicePort, ReflectionSettings,
+    AgentChatRequest, AgentError, AgentProgressEvent, AgentService, AgentServicePort,
 };
 use sandakan::domain::{
     Conversation, ConversationId, EvalSource, Message, ToolCall, ToolCallId, ToolName, ToolResult,
 };
-
+use sandakan::presentation::config::{AgentServiceConfig, ReflectionSettings};
 // ─── Mock: LLM returns ToolCalls on first call, Content on second ─────────────
 
 struct MockLlmToolThenContent {
@@ -154,6 +153,7 @@ impl McpClientPort for MockMcpFailing {
 
 struct MockToolRegistry;
 
+#[async_trait::async_trait]
 impl ToolRegistry for MockToolRegistry {
     fn list_tools(&self) -> Vec<ToolSchema> {
         Vec::new()
@@ -203,6 +203,7 @@ fn default_config() -> AgentServiceConfig {
         tool_fail_fast: false,
         system_prompt: "You are a test agent.".to_string(),
         reflection: ReflectionSettings::default(),
+        max_tool_results: 10,
     }
 }
 
@@ -223,6 +224,7 @@ fn reflection_config(
             correction_budget,
             critic_system_prompt: "You are a critic.".to_string(),
         },
+        max_tool_results: 10,
     }
 }
 

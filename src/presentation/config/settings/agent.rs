@@ -134,14 +134,7 @@ fn default_reflection_correction_budget() -> usize {
 }
 
 fn default_critic_system_prompt() -> String {
-    "You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\n\
-     - Completeness: does it address the full question?\n\
-     - Grounding: is it consistent with what was retrieved (no hallucination)?\n\
-     - Clarity: is it clear and actionable?\n\n\
-     Respond ONLY in this format:\n\
-     SCORE: 0.X\n\
-     ISSUES: <comma-separated list, or \"none\">"
-        .to_string()
+    crate::application::services::DEFAULT_CRITIC_PROMPT.to_string()
 }
 
 impl Default for ReflectionSettings {
@@ -185,6 +178,13 @@ pub struct AgentSettings {
     /// Overridable per-request via `"model": "agent-pipeline"`.
     #[serde(default)]
     pub chat_mode: ChatMode,
+    /// When true, tool descriptions are embedded at startup and only the
+    /// top-K most relevant tools are passed to the LLM each iteration.
+    #[serde(default)]
+    pub semantic_tools: bool,
+    /// Maximum tools returned by semantic search per ReAct iteration.
+    #[serde(default = "default_max_tool_results")]
+    pub max_tool_results: usize,
 }
 
 fn default_agent_system_prompt() -> String {
@@ -197,6 +197,24 @@ fn default_max_iterations() -> usize {
 
 fn default_tool_timeout_secs() -> u64 {
     30
+}
+
+fn default_max_tool_results() -> usize {
+    5
+}
+
+// ─── Service config (single source of truth for AgentService construction) ───
+
+/// Bootstrap-time configuration consumed by `AgentService::new()`.
+/// Built from `AgentSettings` in the composition root (`main.rs`).
+pub struct AgentServiceConfig {
+    pub model_config: String,
+    pub max_iterations: usize,
+    pub tool_timeout_secs: u64,
+    pub tool_fail_fast: bool,
+    pub system_prompt: String,
+    pub reflection: ReflectionSettings,
+    pub max_tool_results: usize,
 }
 
 impl Default for AgentSettings {
@@ -214,6 +232,8 @@ impl Default for AgentSettings {
             fs_tools: None,
             reflection: ReflectionSettings::default(),
             chat_mode: ChatMode::default(),
+            semantic_tools: false,
+            max_tool_results: default_max_tool_results(),
         }
     }
 }

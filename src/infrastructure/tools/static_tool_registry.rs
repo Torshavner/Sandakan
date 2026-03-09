@@ -14,6 +14,7 @@ impl StaticToolRegistry {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolRegistry for StaticToolRegistry {
     fn list_tools(&self) -> Vec<ToolSchema> {
         self.schemas.clone()

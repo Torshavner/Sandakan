@@ -6,121 +6,40 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use tracing::Instrument;
 
+use crate::application::errors::AgentError;
 use crate::application::ports::{
     AgentMessage, ConversationRepository, EvalEventRepository, EvalOutboxRepository, LlmClient,
     LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RagSourceCollector,
-    RepositoryError, ToolRegistry,
+    ToolRegistry,
 };
 use crate::domain::{Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName};
+use crate::presentation::config::AgentServiceConfig;
 
-// ─── Public surface ──────────────────────────────────────────────────────────
+use super::react_helpers::{
+    all_tool_results_failed, build_critic_prompt, parse_critic_response, truncate_for_event,
+};
+use super::schema::{AgentChatRequest, AgentChatResponse, AgentProgressEvent, AgentServicePort};
 
-pub struct AgentChatRequest {
-    pub conversation_id: Option<ConversationId>,
-    pub user_message: String,
-    pub correlation_id: Option<String>,
-}
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-pub struct AgentChatResponse {
-    pub progress_rx: tokio::sync::mpsc::Receiver<AgentProgressEvent>,
-    /// Real token-by-token stream of the final LLM answer.
-    pub token_stream: LlmTokenStream,
-    pub conversation_id: ConversationId,
-}
+pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "\
+You are a helpful AI assistant with access to tools. \
+Use tools when they help you answer the user's question more accurately or completely. \
+Reason step-by-step: think about what information you need, call the appropriate tools, \
+observe the results, and synthesise a final answer. \
+When you have enough information to answer, respond directly without calling additional tools. \
+Always cite relevant sources from retrieved content when available.";
 
-/// Events emitted during the ReAct loop that the presentation layer forwards
-/// as SSE progress messages before the final token stream begins.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentProgressEvent {
-    Thinking {
-        iteration: usize,
-    },
-    ToolCall {
-        name: String,
-    },
-    ToolResult {
-        name: String,
-        truncated_content: String,
-    },
-    Reflection {
-        score: f32,
-        needs_correction: bool,
-        issues: Vec<String>,
-    },
-    CorrectionApplied,
-}
+pub const DEFAULT_CRITIC_PROMPT: &str = "\
+You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\
+\n- Completeness: does it address the full question?\
+\n- Grounding: is it consistent with what was retrieved (no hallucination)?\
+\n- Clarity: is it clear and actionable?\
+\n\nRespond ONLY in this format:\
+\nSCORE: 0.X\
+\nISSUES: <comma-separated list, or \"none\">";
 
-#[derive(Debug, thiserror::Error)]
-pub enum AgentError {
-    #[error("max iterations ({0}) exceeded without final answer")]
-    MaxIterationsExceeded(usize),
-    #[error("llm error: {0}")]
-    Llm(#[from] LlmClientError),
-    #[error("tool execution error: {0}")]
-    Tool(String),
-    #[error("repository error: {0}")]
-    Repository(String),
-}
-
-impl From<RepositoryError> for AgentError {
-    fn from(e: RepositoryError) -> Self {
-        AgentError::Repository(e.to_string())
-    }
-}
-
-impl From<McpError> for AgentError {
-    fn from(e: McpError) -> Self {
-        AgentError::Tool(e.to_string())
-    }
-}
-
-// ─── Port (thin trait for AppState to avoid 5th generic) ─────────────────────
-
-#[async_trait]
-pub trait AgentServicePort: Send + Sync {
-    async fn chat(&self, request: AgentChatRequest) -> Result<AgentChatResponse, AgentError>;
-}
-
-// ─── Service config ───────────────────────────────────────────────────────────
-
-pub struct ReflectionSettings {
-    pub enabled: bool,
-    /// Minimum score (0.0–1.0) for an answer to be returned without correction.
-    pub score_threshold: f32,
-    /// Maximum number of correction passes per turn (prevents run-away LLM cost).
-    pub correction_budget: usize,
-    /// System prompt sent to the critic LLM call.
-    pub critic_system_prompt: String,
-}
-
-impl Default for ReflectionSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            score_threshold: 0.7,
-            correction_budget: 1,
-            critic_system_prompt: DEFAULT_CRITIC_PROMPT.to_string(),
-        }
-    }
-}
-
-pub struct AgentServiceConfig {
-    pub model_config: String,
-    pub max_iterations: usize,
-    /// Per-tool call timeout. A timed-out tool is surfaced as a `[tool_timeout]`
-    /// ToolResult rather than aborting the whole agent turn.
-    pub tool_timeout_secs: u64,
-    /// When `true`, any tool error (except `ToolNotFound`) hard-fails the turn.
-    /// When `false` (default), errors are surfaced as `[tool_error]` ToolResults.
-    pub tool_fail_fast: bool,
-    /// System prompt prepended as the first message on every agent turn.
-    /// Instructs the LLM about its role, available tools, and reasoning approach.
-    pub system_prompt: String,
-    pub reflection: ReflectionSettings,
-}
-
-// ─── Concrete service ─────────────────────────────────────────────────────────
+// ─── Concrete service ────────────────────────────────────────────────────────
 
 pub struct AgentService {
     llm_client: Arc<dyn LlmClient>,
@@ -181,12 +100,28 @@ impl AgentService {
                 .collect();
         messages.push(AgentMessage::User(user_message));
 
-        let tools = self.tool_registry.list_tools();
         let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
 
         for iteration in 0..self.config.max_iterations {
             // Discard send errors — the handler may have disconnected.
             let _ = progress_tx.try_send(AgentProgressEvent::Thinking { iteration });
+
+            // Retrieve tools relevant to the current conversation state.
+            // On the first iteration use the user message; on subsequent
+            // iterations use the latest message (which may be a tool result
+            // or nudge) to refine tool selection.
+            let current_intent = messages
+                .iter()
+                .rev()
+                .find_map(|m| match m {
+                    AgentMessage::User(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+            let tools = self
+                .tool_registry
+                .search_tools(current_intent, self.config.max_tool_results)
+                .await;
 
             match self
                 .llm_client
@@ -246,6 +181,24 @@ impl AgentService {
 
                         messages.push(AgentMessage::ToolResult(tool_result));
                     }
+
+                    // Quality gate: nudge the LLM when every tool call failed.
+                    let recent_results: Vec<&crate::domain::ToolResult> = messages
+                        .iter()
+                        .rev()
+                        .take(calls.len())
+                        .filter_map(|m| match m {
+                            AgentMessage::ToolResult(r) => Some(r),
+                            _ => None,
+                        })
+                        .collect();
+                    if all_tool_results_failed(&recent_results) {
+                        messages.push(AgentMessage::User(
+                            "All tool calls failed or timed out. \
+                             Try rephrasing your query or using a different tool."
+                                .to_string(),
+                        ));
+                    }
                 }
 
                 LlmToolResponse::Content(answer) => {
@@ -254,9 +207,18 @@ impl AgentService {
             }
         }
 
-        Err(AgentError::MaxIterationsExceeded(
-            self.config.max_iterations,
-        ))
+        // Graceful fallback: synthesise a best-effort answer instead of a hard error.
+        messages.push(AgentMessage::User(
+            "You have reached the maximum number of reasoning steps. \
+             Synthesise the best possible answer from the information gathered so far."
+                .to_string(),
+        ));
+        match self.llm_client.complete_with_tools(&messages, &[]).await? {
+            LlmToolResponse::Content(answer) => Ok((answer, messages)),
+            _ => Err(AgentError::MaxIterationsExceeded(
+                self.config.max_iterations,
+            )),
+        }
     }
 
     async fn persist_turn(
@@ -352,6 +314,9 @@ impl AgentService {
     /// below the configured threshold and the budget allows, appends the critic's
     /// feedback and runs one correction iteration.
     ///
+    /// The critic receives the full conversation context (user question, tool
+    /// results, and candidate answer) so it can judge grounding and completeness.
+    ///
     /// Gracefully degrades: any failure to parse the critic response is treated
     /// as score = 1.0 so the original answer is returned unchanged.
     async fn reflect_and_correct(
@@ -364,12 +329,14 @@ impl AgentService {
 
         let mut current_answer = candidate_answer;
         let tools = self.tool_registry.list_tools();
+        let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
+
+        // Budget for tool-call iterations within a single correction pass.
+        const MAX_CORRECTION_TOOL_ITERATIONS: usize = 3;
 
         for _ in 0..cfg.correction_budget {
-            let critic_prompt = format!(
-                "{}\n\nCandidate answer:\n{}",
-                cfg.critic_system_prompt, current_answer
-            );
+            let critic_prompt =
+                build_critic_prompt(&messages, &cfg.critic_system_prompt, &current_answer);
 
             let raw = match self.llm_client.complete(&critic_prompt, "").await {
                 Ok(r) => r,
@@ -393,19 +360,57 @@ impl AgentService {
             }
 
             let feedback = format!(
-                "Your previous answer scored {score:.2}/1.0 for completeness and grounding. Issues noted:\n{}\n\nPlease provide a corrected, more complete answer.",
+                "Your previous answer scored {score:.2}/1.0 for completeness and grounding. \
+                 Issues noted:\n{}\n\nPlease provide a corrected, more complete answer.",
                 issues.join(", ")
             );
             messages.push(AgentMessage::User(feedback));
 
-            current_answer = match self
-                .llm_client
-                .complete_with_tools(&messages, &tools)
-                .await?
-            {
-                LlmToolResponse::Content(r) => r,
-                LlmToolResponse::ToolCalls(_) => return Ok((current_answer, messages)),
-            };
+            // The correction pass may need tools (e.g. re-query RAG). Run a
+            // bounded mini-loop so we don't bail on the first ToolCalls response.
+            for _ in 0..MAX_CORRECTION_TOOL_ITERATIONS {
+                match self
+                    .llm_client
+                    .complete_with_tools(&messages, &tools)
+                    .await?
+                {
+                    LlmToolResponse::Content(r) => {
+                        current_answer = r;
+                        break;
+                    }
+                    LlmToolResponse::ToolCalls(calls) => {
+                        messages.push(AgentMessage::Assistant {
+                            content: None,
+                            tool_calls: calls.clone(),
+                        });
+
+                        let outcomes: Vec<_> = join_all(calls.iter().map(|call| {
+                            tokio::time::timeout(timeout_dur, self.mcp_client.call_tool(call))
+                        }))
+                        .await;
+
+                        for (call, outcome) in calls.iter().zip(outcomes) {
+                            let tool_result = match outcome {
+                                Ok(Ok(r)) => r,
+                                Ok(Err(e)) => crate::domain::ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    content: format!("[tool_error] {}: {e}", call.name),
+                                },
+                                Err(_elapsed) => crate::domain::ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    content: format!(
+                                        "[tool_timeout] {} did not respond within {}s",
+                                        call.name, self.config.tool_timeout_secs
+                                    ),
+                                },
+                            };
+                            messages.push(AgentMessage::ToolResult(tool_result));
+                        }
+                    }
+                }
+            }
 
             let _ = progress_tx.try_send(AgentProgressEvent::CorrectionApplied);
         }
@@ -482,71 +487,4 @@ impl AgentServicePort for AgentService {
             conversation_id,
         })
     }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "\
-You are a helpful AI assistant with access to tools. \
-Use tools when they help you answer the user's question more accurately or completely. \
-Reason step-by-step: think about what information you need, call the appropriate tools, \
-observe the results, and synthesise a final answer. \
-When you have enough information to answer, respond directly without calling additional tools. \
-Always cite relevant sources from retrieved content when available.";
-
-const DEFAULT_CRITIC_PROMPT: &str = "\
-You are a critical evaluator. Review the candidate answer below and score it from 0.0 to 1.0 based on:\
-\n- Completeness: does it address the full question?\
-\n- Grounding: is it consistent with what was retrieved (no hallucination)?\
-\n- Clarity: is it clear and actionable?\
-\n\nRespond ONLY in this format:\
-\nSCORE: 0.X\
-\nISSUES: <comma-separated list, or \"none\">";
-
-/// Truncates `s` to at most `max_bytes` bytes without splitting a UTF-8 codepoint.
-///
-/// `s.len()` is a byte count, so a naive `&s[..max_bytes]` panics when the cut
-/// lands inside a multi-byte sequence (CJK, emoji, accented text). Walking
-/// `char_indices` finds the last safe codepoint boundary at or before the limit.
-fn truncate_for_event(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    // Find the byte offset of the last char that fits entirely within max_bytes.
-    let boundary = s
-        .char_indices()
-        .take_while(|(byte_pos, ch)| byte_pos + ch.len_utf8() <= max_bytes)
-        .last()
-        .map(|(byte_pos, ch)| byte_pos + ch.len_utf8())
-        .unwrap_or(0);
-    format!("{}…", &s[..boundary])
-}
-
-/// Parses `SCORE: 0.X` and `ISSUES: ...` lines from a critic response.
-///
-/// Returns `(1.0, [])` on any parse failure so the caller treats the answer as
-/// passing and skips the correction pass (graceful degradation).
-fn parse_critic_response(raw: &str) -> (f32, Vec<String>) {
-    let mut score: f32 = 1.0;
-    let mut issues: Vec<String> = Vec::new();
-
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("SCORE:") {
-            if let Ok(v) = rest.trim().parse::<f32>() {
-                score = v.clamp(0.0, 1.0);
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("ISSUES:") {
-            let rest = rest.trim();
-            if !rest.eq_ignore_ascii_case("none") {
-                issues = rest
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-        }
-    }
-
-    (score, issues)
 }

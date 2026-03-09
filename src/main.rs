@@ -18,8 +18,7 @@ use sandakan::application::ports::{
     SparseEmbedder, StagingStore, ToolSchema, TranscriptionEngine, VectorStore,
 };
 use sandakan::application::services::{
-    AgentService, AgentServiceConfig, AgentServicePort, EvalWorker, IngestionService,
-    IngestionWorker, RetrievalService,
+    AgentService, AgentServicePort, EvalWorker, IngestionService, IngestionWorker, RetrievalService,
 };
 use sandakan::domain::ContentType;
 use sandakan::infrastructure::audio::{
@@ -43,8 +42,10 @@ use sandakan::infrastructure::text_processing::{
 };
 use sandakan::infrastructure::tools::{
     InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
-    RagSearchAdapter, StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
+    RagSearchAdapter, SemanticToolRegistry, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
+    build_fs_tools,
 };
+use sandakan::presentation::config::ReflectionSettings;
 use sandakan::presentation::{
     AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
     TranscriptionProviderSetting, create_router,
@@ -144,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
     let agent_service = build_agent_service(
         &settings,
         &llm_client,
+        &embedder,
         &retrieval_service,
         &conversation_repository,
         agent_eval_event_repo,
@@ -479,6 +481,7 @@ fn spawn_workers(
 async fn build_agent_service(
     settings: &Settings,
     llm_client: &Arc<StreamingLlmClient>,
+    embedder: &Arc<dyn Embedder>,
     retrieval_service: &Arc<RetrievalService<StreamingLlmClient, QdrantAdapter>>,
     conversation_repository: &Arc<dyn ConversationRepository>,
     eval_event_repo: Option<Arc<dyn EvalEventRepository>>,
@@ -561,20 +564,34 @@ async fn build_agent_service(
 
     let mcp_client = build_mcp_client(&settings.agent.mcp_servers, handlers, &mut schemas).await;
 
-    let tool_registry = Arc::new(StaticToolRegistry::new(schemas));
+    let tool_registry: Arc<dyn sandakan::application::ports::ToolRegistry> = if settings
+        .agent
+        .semantic_tools
+    {
+        match SemanticToolRegistry::try_new(schemas.clone(), Arc::clone(embedder)).await {
+            Ok(r) => Arc::new(r),
+            Err(e) => {
+                tracing::warn!(error = %e, "Semantic tool registry init failed; falling back to static");
+                Arc::new(StaticToolRegistry::new(schemas))
+            }
+        }
+    } else {
+        Arc::new(StaticToolRegistry::new(schemas))
+    };
 
-    let agent_config = AgentServiceConfig {
+    let agent_config = sandakan::presentation::config::AgentServiceConfig {
         model_config: format!("{}/{}", settings.llm.provider, settings.llm.chat_model),
         max_iterations: settings.agent.max_iterations,
         tool_timeout_secs: settings.agent.tool_timeout_secs,
         tool_fail_fast: settings.agent.tool_fail_fast,
         system_prompt: settings.agent.system_prompt.clone(),
-        reflection: sandakan::application::services::ReflectionSettings {
+        reflection: ReflectionSettings {
             enabled: settings.agent.reflection.enabled,
             score_threshold: settings.agent.reflection.score_threshold,
             correction_budget: settings.agent.reflection.correction_budget,
             critic_system_prompt: settings.agent.reflection.critic_system_prompt.clone(),
         },
+        max_tool_results: settings.agent.max_tool_results,
     };
 
     let svc = Arc::new(AgentService::new(

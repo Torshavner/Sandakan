@@ -1,4 +1,4 @@
-mod agent_service;
+mod agent;
 pub mod eval_metrics;
 mod eval_worker;
 mod ingestion_service;
@@ -6,9 +6,10 @@ mod ingestion_worker;
 mod retrieval_service;
 mod token_counter;
 
-pub use agent_service::{
-    AgentChatRequest, AgentChatResponse, AgentError, AgentProgressEvent, AgentService,
-    AgentServiceConfig, AgentServicePort, DEFAULT_AGENT_SYSTEM_PROMPT, ReflectionSettings,
+pub use crate::application::errors::AgentError;
+pub use agent::{
+    AgentChatRequest, AgentChatResponse, AgentProgressEvent, AgentService, AgentServicePort,
+    DEFAULT_AGENT_SYSTEM_PROMPT, DEFAULT_CRITIC_PROMPT,
 };
 pub use eval_worker::{EvalWorker, EvalWorkerError};
 pub use ingestion_service::{IngestionError, IngestionService};

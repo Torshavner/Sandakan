@@ -2,6 +2,7 @@ mod fs_tool_adapter;
 mod in_memory_rag_source_collector;
 mod notification_adapter;
 mod rag_search_adapter;
+mod semantic_tool_registry;
 mod static_tool_registry;
 mod web_search_adapter;
 
@@ -12,5 +13,6 @@ pub use notification_adapter::{
     build_body as build_notification_body,
 };
 pub use rag_search_adapter::RagSearchAdapter;
+pub use semantic_tool_registry::SemanticToolRegistry;
 pub use static_tool_registry::StaticToolRegistry;
 pub use web_search_adapter::{WebSearchAdapter, WebSearchConfig};
