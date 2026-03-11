@@ -8,45 +8,34 @@ pub enum ChatMode {
     Agent,
 }
 
-// ─── MCP transports ───────────────────────────────────────────────────────────
+// ─── Unified tool configuration ───────────────────────────────────────────────
 
-/// Discriminated union over the two MCP wire transports.
+/// A single entry in the `tools` array. The `"type"` field selects the variant.
+///
+/// Built-in tools:
+///   `{ "type": "rag_search" }`
+///   `{ "type": "web_search", "api_key": "...", "max_results": 5 }`
+///   `{ "type": "notification", "webhook_url": "...", "format": "slack" }`
+///   `{ "type": "fs", "root_path": "./src" }`
+///
+/// External MCP servers:
+///   `{ "type": "mcp_stdio", "name": "github", "command": "npx", "args": [...], "env": {...} }`
+///   `{ "type": "mcp_sse",   "name": "my-server", "endpoint": "http://..." }`
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "transport", rename_all = "snake_case")]
-pub enum McpServerConfig {
-    Stdio(StdioMcpServerConfig),
-    Sse(SseMcpServerConfig),
-}
-
-impl McpServerConfig {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Stdio(c) => &c.name,
-            Self::Sse(c) => &c.name,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StdioMcpServerConfig {
-    pub name: String,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SseMcpServerConfig {
-    pub name: String,
-    pub endpoint: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolConfig {
+    RagSearch,
+    WebSearch(WebSearchConfig),
+    Notification(NotificationConfig),
+    Fs(FsConfig),
+    McpStdio(McpStdioConfig),
+    McpSse(McpSseConfig),
 }
 
 // ─── Web search ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct WebSearchSettings {
+pub struct WebSearchConfig {
     pub api_key: String,
     #[serde(default = "default_search_endpoint")]
     pub endpoint: String,
@@ -64,19 +53,15 @@ fn default_search_max_results() -> usize {
 
 // ─── Notification ─────────────────────────────────────────────────────────────
 
-/// Serialised form of the notification body format.
-///
-/// Kept separate from the domain enum so serde rename_all applies at
-/// the config boundary only and the adapter stays format-agnostic.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NotificationFormatSetting {
+pub enum NotificationFormat {
     Plain,
     Slack,
 }
 
-fn default_notification_format() -> NotificationFormatSetting {
-    NotificationFormatSetting::Plain
+fn default_notification_format() -> NotificationFormat {
+    NotificationFormat::Plain
 }
 
 fn default_notification_timeout() -> u64 {
@@ -84,10 +69,10 @@ fn default_notification_timeout() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct NotificationSettings {
+pub struct NotificationConfig {
     pub webhook_url: String,
     #[serde(default = "default_notification_format")]
-    pub format: NotificationFormatSetting,
+    pub format: NotificationFormat,
     #[serde(default = "default_notification_timeout")]
     pub timeout_secs: u64,
 }
@@ -95,7 +80,7 @@ pub struct NotificationSettings {
 // ─── Filesystem tool ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct FsToolSettings {
+pub struct FsConfig {
     pub root_path: String,
     #[serde(default = "default_max_read_bytes")]
     pub max_read_bytes: usize,
@@ -109,6 +94,24 @@ fn default_max_read_bytes() -> usize {
 
 fn default_max_dir_entries() -> usize {
     200
+}
+
+// ─── MCP transports ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpStdioConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpSseConfig {
+    pub name: String,
+    pub endpoint: String,
 }
 
 // ─── Reflection ───────────────────────────────────────────────────────────────
@@ -162,20 +165,13 @@ pub struct AgentSettings {
     pub tool_fail_fast: bool,
     #[serde(default = "default_agent_system_prompt")]
     pub system_prompt: String,
+    /// Unified tool list — presence in the array means enabled.
+    /// Replaces the old per-tool top-level fields.
     #[serde(default)]
-    pub web_search: Option<WebSearchSettings>,
-    #[serde(default)]
-    pub rag_search_enabled: bool,
-    #[serde(default)]
-    pub notification: Option<NotificationSettings>,
-    #[serde(default)]
-    pub mcp_servers: Vec<McpServerConfig>,
-    #[serde(default)]
-    pub fs_tools: Option<FsToolSettings>,
+    pub tools: Vec<ToolConfig>,
     #[serde(default)]
     pub reflection: ReflectionSettings,
     /// Which backend handles `/v1/chat/completions` by default.
-    /// Overridable per-request via `"model": "agent-pipeline"`.
     #[serde(default)]
     pub chat_mode: ChatMode,
     /// When true, tool descriptions are embedded at startup and only the
@@ -185,6 +181,11 @@ pub struct AgentSettings {
     /// Maximum tools returned by semantic search per ReAct iteration.
     #[serde(default = "default_max_tool_results")]
     pub max_tool_results: usize,
+    /// When true, the names and descriptions of all registered tools are
+    /// appended to the system prompt at runtime. Helps weaker models that
+    /// do not reliably infer available tools from the API schema alone.
+    #[serde(default)]
+    pub dynamic_tools_description: bool,
 }
 
 fn default_agent_system_prompt() -> String {
@@ -215,6 +216,7 @@ pub struct AgentServiceConfig {
     pub system_prompt: String,
     pub reflection: ReflectionSettings,
     pub max_tool_results: usize,
+    pub dynamic_tools_description: bool,
 }
 
 impl Default for AgentSettings {
@@ -225,15 +227,12 @@ impl Default for AgentSettings {
             tool_timeout_secs: default_tool_timeout_secs(),
             tool_fail_fast: false,
             system_prompt: default_agent_system_prompt(),
-            web_search: None,
-            rag_search_enabled: false,
-            notification: None,
-            mcp_servers: Vec::new(),
-            fs_tools: None,
+            tools: Vec::new(),
             reflection: ReflectionSettings::default(),
             chat_mode: ChatMode::default(),
             semantic_tools: false,
             max_tool_results: default_max_tool_results(),
+            dynamic_tools_description: false,
         }
     }
 }

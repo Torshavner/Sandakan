@@ -15,7 +15,7 @@ use sandakan::application::ports::RetrievalServicePort;
 use sandakan::application::ports::{
     AudioDecoder, CollectionConfig, ConversationRepository, Embedder, EvalEventRepository,
     EvalOutboxRepository, EvalResultRepository, FileLoader, JobRepository, LlmClient,
-    SparseEmbedder, StagingStore, ToolSchema, TranscriptionEngine, VectorStore,
+    SparseEmbedder, StagingStore, TranscriptionEngine, VectorStore,
 };
 use sandakan::application::services::{
     AgentService, AgentServicePort, EvalWorker, IngestionService, IngestionWorker, RetrievalService,
@@ -46,9 +46,9 @@ use sandakan::infrastructure::tools::{
     build_fs_tools,
 };
 use sandakan::presentation::config::ReflectionSettings;
+use sandakan::presentation::config::{NotificationFormat as ConfigNotificationFormat, ToolConfig};
 use sandakan::presentation::{
-    AppState, Environment, McpServerConfig, NotificationFormatSetting, Settings,
-    TranscriptionProviderSetting, create_router,
+    AppState, Environment, Settings, TranscriptionProviderSetting, create_router,
 };
 
 const INGESTION_CHANNEL_CAPACITY: usize = 64;
@@ -494,75 +494,112 @@ async fn build_agent_service(
 
     let mut handlers: Vec<Arc<dyn ToolHandler>> = Vec::new();
     let mut schemas = Vec::new();
+    let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
 
-    if let Some(ws_config) = &settings.agent.web_search {
-        let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
-            api_key: ws_config.api_key.clone(),
-            endpoint: ws_config.endpoint.clone(),
-            max_results: ws_config.max_results,
-        }));
-        schemas.push(WebSearchAdapter::tool_schema());
-        handlers.push(adapter as Arc<dyn ToolHandler>);
-    }
-
+    let has_rag_search = settings
+        .agent
+        .tools
+        .iter()
+        .any(|t| matches!(t, ToolConfig::RagSearch));
     let rag_source_collector: Option<Arc<dyn RagSourceCollector>> =
-        if settings.agent.rag_search_enabled && settings.eval.enabled {
+        if has_rag_search && settings.eval.enabled {
             Some(Arc::new(InMemoryRagSourceCollector::new()))
         } else {
             None
         };
 
-    if settings.agent.rag_search_enabled {
-        let rag = Arc::new(RagSearchAdapter::new(
-            Arc::clone(retrieval_service) as Arc<dyn RetrievalServicePort>,
-            rag_source_collector.clone(),
-        ));
-        schemas.push(RagSearchAdapter::tool_schema());
-        handlers.push(rag as Arc<dyn ToolHandler>);
-        tracing::info!("RAG search tool registered");
-    }
-
-    if let Some(notif) = &settings.agent.notification {
-        let format = match notif.format {
-            NotificationFormatSetting::Plain => NotificationFormat::Plain,
-            NotificationFormatSetting::Slack => NotificationFormat::Slack,
-        };
-        let adapter = Arc::new(NotificationAdapter::new(NotificationConfig {
-            webhook_url: notif.webhook_url.clone(),
-            format,
-            timeout_secs: notif.timeout_secs,
-        })?);
-        schemas.push(NotificationAdapter::tool_schema());
-        handlers.push(adapter as Arc<dyn ToolHandler>);
-        tracing::info!(
-            webhook_url = %notif.webhook_url,
-            "Notification webhook tool registered"
-        );
-    }
-
-    if let Some(fs_cfg) = &settings.agent.fs_tools {
-        match build_fs_tools(
-            &fs_cfg.root_path,
-            fs_cfg.max_read_bytes,
-            fs_cfg.max_dir_entries,
-        ) {
-            Ok((list_tool, read_tool)) => {
-                schemas.push(sandakan::infrastructure::tools::ListDirectoryTool::tool_schema());
-                schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
-                handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
-                handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
-                tracing::info!(
-                    root_path = %fs_cfg.root_path,
-                    "Filesystem introspection tools registered (list_directory, read_file)"
-                );
+    for tool in &settings.agent.tools {
+        match tool {
+            ToolConfig::RagSearch => {
+                let rag = Arc::new(RagSearchAdapter::new(
+                    Arc::clone(retrieval_service) as Arc<dyn RetrievalServicePort>,
+                    rag_source_collector.clone(),
+                ));
+                schemas.push(RagSearchAdapter::tool_schema());
+                handlers.push(rag as Arc<dyn ToolHandler>);
+                tracing::info!("RAG search tool registered");
             }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to initialize fs_tools — tools not registered");
+            ToolConfig::WebSearch(cfg) => {
+                let adapter = Arc::new(WebSearchAdapter::new(WebSearchConfig {
+                    api_key: cfg.api_key.clone(),
+                    endpoint: cfg.endpoint.clone(),
+                    max_results: cfg.max_results,
+                }));
+                schemas.push(WebSearchAdapter::tool_schema());
+                handlers.push(adapter as Arc<dyn ToolHandler>);
+                tracing::info!("Web search tool registered");
+            }
+            ToolConfig::Notification(cfg) => {
+                let format = match cfg.format {
+                    ConfigNotificationFormat::Plain => NotificationFormat::Plain,
+                    ConfigNotificationFormat::Slack => NotificationFormat::Slack,
+                };
+                match NotificationAdapter::new(NotificationConfig {
+                    webhook_url: cfg.webhook_url.clone(),
+                    format,
+                    timeout_secs: cfg.timeout_secs,
+                }) {
+                    Ok(adapter) => {
+                        schemas.push(NotificationAdapter::tool_schema());
+                        handlers.push(Arc::new(adapter) as Arc<dyn ToolHandler>);
+                        tracing::info!(webhook_url = %cfg.webhook_url, "Notification tool registered");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize notification tool");
+                    }
+                }
+            }
+            ToolConfig::Fs(cfg) => {
+                match build_fs_tools(&cfg.root_path, cfg.max_read_bytes, cfg.max_dir_entries) {
+                    Ok((list_tool, read_tool)) => {
+                        schemas.push(
+                            sandakan::infrastructure::tools::ListDirectoryTool::tool_schema(),
+                        );
+                        schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
+                        handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
+                        handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
+                        tracing::info!(root_path = %cfg.root_path, "Filesystem tools registered");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize fs tools");
+                    }
+                }
+            }
+            ToolConfig::McpStdio(cfg) => {
+                tracing::info!(name = %cfg.name, command = %cfg.command, "Connecting to stdio MCP server");
+                match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
+                    Ok(client) => {
+                        schemas.extend(client.tool_schemas.clone());
+                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                    }
+                    Err(e) => {
+                        tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
+                    }
+                }
+            }
+            ToolConfig::McpSse(cfg) => {
+                tracing::info!(name = %cfg.name, endpoint = %cfg.endpoint, "Connecting to SSE MCP server");
+                match SseMcpClient::new(&cfg.endpoint).await {
+                    Ok(client) => {
+                        schemas.extend(client.tool_schemas.clone());
+                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
+                    }
+                    Err(e) => {
+                        tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
+                    }
+                }
             }
         }
     }
 
-    let mcp_client = build_mcp_client(&settings.agent.mcp_servers, handlers, &mut schemas).await;
+    let mcp_client: Arc<dyn McpClientPort> = if wire_clients.is_empty() {
+        Arc::new(StandardMcpAdapter::new(handlers))
+    } else {
+        Arc::new(CompositeMcpClient::new(
+            wire_clients,
+            StandardMcpAdapter::new(handlers),
+        ))
+    };
 
     let tool_registry: Arc<dyn sandakan::application::ports::ToolRegistry> = if settings
         .agent
@@ -592,6 +629,7 @@ async fn build_agent_service(
             critic_system_prompt: settings.agent.reflection.critic_system_prompt.clone(),
         },
         max_tool_results: settings.agent.max_tool_results,
+        dynamic_tools_description: settings.agent.dynamic_tools_description,
     };
 
     let svc = Arc::new(AgentService::new(
@@ -613,60 +651,6 @@ async fn build_agent_service(
     );
 
     Ok(Some(svc as Arc<dyn AgentServicePort>))
-}
-
-async fn build_mcp_client(
-    mcp_servers: &[McpServerConfig],
-    handlers: Vec<Arc<dyn ToolHandler>>,
-    schemas: &mut Vec<ToolSchema>,
-) -> Arc<dyn McpClientPort> {
-    let mut wire_clients: Vec<Arc<dyn McpClientPort>> = Vec::new();
-
-    for server_cfg in mcp_servers {
-        match server_cfg {
-            McpServerConfig::Stdio(cfg) => {
-                tracing::info!(
-                    name = %cfg.name,
-                    command = %cfg.command,
-                    "Connecting to stdio MCP server"
-                );
-                match StdioMcpClient::new(&cfg.command, &cfg.args, &cfg.env).await {
-                    Ok(client) => {
-                        schemas.extend(client.tool_schemas.clone());
-                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
-                    }
-                    Err(e) => {
-                        tracing::error!(name = %cfg.name, error = %e, "Failed to start stdio MCP server");
-                    }
-                }
-            }
-            McpServerConfig::Sse(cfg) => {
-                tracing::info!(
-                    name = %cfg.name,
-                    endpoint = %cfg.endpoint,
-                    "Connecting to SSE MCP server"
-                );
-                match SseMcpClient::new(&cfg.endpoint).await {
-                    Ok(client) => {
-                        schemas.extend(client.tool_schemas.clone());
-                        wire_clients.push(Arc::new(client) as Arc<dyn McpClientPort>);
-                    }
-                    Err(e) => {
-                        tracing::error!(name = %cfg.name, error = %e, "Failed to connect to SSE MCP server");
-                    }
-                }
-            }
-        }
-    }
-
-    if wire_clients.is_empty() {
-        Arc::new(StandardMcpAdapter::new(handlers)) as Arc<dyn McpClientPort>
-    } else {
-        Arc::new(CompositeMcpClient::new(
-            wire_clients,
-            StandardMcpAdapter::new(handlers),
-        )) as Arc<dyn McpClientPort>
-    }
 }
 
 fn parse_listen_addr(settings: &Settings) -> SocketAddr {

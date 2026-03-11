@@ -12,9 +12,8 @@ mod server;
 mod storage;
 
 pub use agent::{
-    AgentServiceConfig, AgentSettings, ChatMode, FsToolSettings, McpServerConfig,
-    NotificationFormatSetting, NotificationSettings, ReflectionSettings, SseMcpServerConfig,
-    StdioMcpServerConfig, WebSearchSettings,
+    AgentServiceConfig, AgentSettings, ChatMode, FsConfig, McpSseConfig, McpStdioConfig,
+    NotificationConfig, NotificationFormat, ReflectionSettings, ToolConfig, WebSearchConfig,
 };
 pub use chunking::{ChunkingSettings, ChunkingStrategy};
 pub use database::DatabaseSettings;

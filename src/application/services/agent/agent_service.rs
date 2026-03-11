@@ -24,7 +24,7 @@ use super::schema::{AgentChatRequest, AgentChatResponse, AgentProgressEvent, Age
 
 pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "\
 You are a helpful AI assistant with access to tools. \
-Use tools when they help you answer the user's question more accurately or completely. \
+Always use the available tools — never answer from memory alone. \
 Reason step-by-step: think about what information you need, call the appropriate tools, \
 observe the results, and synthesise a final answer. \
 When you have enough information to answer, respond directly without calling additional tools. \
@@ -94,8 +94,24 @@ impl AgentService {
             .await
             .map_err(AgentError::from)?;
 
+        let system_prompt = if self.config.dynamic_tools_description {
+            let tool_list = self
+                .tool_registry
+                .list_tools()
+                .into_iter()
+                .map(|t| format!("- {}: {}", t.name, t.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{}\n\nAvailable tools:\n{}",
+                self.config.system_prompt, tool_list
+            )
+        } else {
+            self.config.system_prompt.clone()
+        };
+
         let mut messages: Vec<AgentMessage> =
-            std::iter::once(AgentMessage::System(self.config.system_prompt.clone()))
+            std::iter::once(AgentMessage::System(system_prompt))
                 .chain(history.into_iter().map(AgentMessage::from))
                 .collect();
         messages.push(AgentMessage::User(user_message));
