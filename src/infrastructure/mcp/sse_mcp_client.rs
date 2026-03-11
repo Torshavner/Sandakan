@@ -118,6 +118,10 @@ impl SseMcpClient {
             .map_err(|e| McpError::Serialization(format!("parsing JSON-RPC response: {e}")))?;
 
         if let Some(err) = rpc.error {
+            let msg_lower = err.message.to_lowercase();
+            if msg_lower.contains("unknown tool") || msg_lower.contains("tool not found") {
+                return Err(McpError::ToolNotFound(err.message));
+            }
             return Err(McpError::Protocol(err.message));
         }
 

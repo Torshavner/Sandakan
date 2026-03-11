@@ -151,6 +151,12 @@ impl StdioMcpClient {
         let response = rx.await.map_err(|_| McpError::ServerExited)?;
 
         if let Some(err) = response.error {
+            // MCP servers signal unknown tools via JSON-RPC error; normalise so
+            // CompositeMcpClient can fall through to the next handler.
+            let msg_lower = err.message.to_lowercase();
+            if msg_lower.contains("unknown tool") || msg_lower.contains("tool not found") {
+                return Err(McpError::ToolNotFound(err.message));
+            }
             return Err(McpError::Protocol(err.message));
         }
 

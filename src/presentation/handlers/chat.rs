@@ -92,20 +92,6 @@ where
     );
 
     if use_agent {
-        // Agent always streams — reject non-streaming requests early.
-        if request.stream != Some(true) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ChatError {
-                        message: "Agent mode requires streaming. Set \"stream\": true.".to_string(),
-                        r#type: "invalid_request_error".to_string(),
-                    },
-                }),
-            )
-                .into_response();
-        }
-
         let service = match agent_service {
             Some(s) => s,
             None => {
@@ -142,6 +128,31 @@ where
                 let keep_alive_secs = state.settings.llm.sse_keep_alive_seconds;
                 let mut progress_rx = response.progress_rx;
                 let mut token_stream = response.token_stream;
+
+                // Non-streaming fallback: collect all tokens into a single response.
+                if request.stream != Some(true) {
+                    let mut full_text = String::new();
+                    while let Some(result) = token_stream.next().await {
+                        match result {
+                            Ok(token) => full_text.push_str(&token),
+                            Err(e) => {
+                                tracing::error!(error = %e, "Agent token stream error (non-streaming)");
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(ErrorResponse {
+                                        error: ChatError {
+                                            message: format!("Agent failed: {}", e),
+                                            r#type: "api_error".to_string(),
+                                        },
+                                    }),
+                                )
+                                    .into_response();
+                            }
+                        }
+                    }
+                    let chat_response = ChatCompletionResponse::new(model, full_text);
+                    return (StatusCode::OK, Json(chat_response)).into_response();
+                }
 
                 let sse_stream = async_stream::stream! {
                     let start_chunk = ChatCompletionChunk::new_start(&chunk_id, &model);

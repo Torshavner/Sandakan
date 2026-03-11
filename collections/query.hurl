@@ -9,7 +9,7 @@
 POST {{base_url}}/api/v1/query
 Content-Type: application/json
 {
-    "question": "Why is hybrid search better than vector-only search?"
+    "question": "Tell me more about ColPali revolution in terms of VLMs"
 }
 HTTP 200
 [Asserts]
