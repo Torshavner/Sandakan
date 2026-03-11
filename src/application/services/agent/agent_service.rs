@@ -111,10 +111,9 @@ impl AgentService {
             self.config.system_prompt.clone()
         };
 
-        let mut messages: Vec<AgentMessage> =
-            std::iter::once(AgentMessage::System(system_prompt))
-                .chain(history.into_iter().map(AgentMessage::from))
-                .collect();
+        let mut messages: Vec<AgentMessage> = std::iter::once(AgentMessage::System(system_prompt))
+            .chain(history.into_iter().map(AgentMessage::from))
+            .collect();
         messages.push(AgentMessage::User(user_message));
 
         let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
@@ -140,12 +139,25 @@ impl AgentService {
                 .search_tools(current_intent, self.config.max_tool_results)
                 .await;
 
+            tracing::debug!(
+                iteration,
+                tool_count = tools.len(),
+                tools = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                "ReAct: calling LLM"
+            );
+
             match self
                 .llm_client
                 .complete_with_tools(&messages, &tools)
                 .await?
             {
                 LlmToolResponse::ToolCalls(calls) => {
+                    tracing::debug!(
+                        iteration,
+                        calls = ?calls.iter().map(|c| format!("{}({})", c.name, c.arguments)).collect::<Vec<_>>(),
+                        "ReAct: LLM decided to call tools"
+                    );
+
                     // Append the assistant's tool-call intent to message history.
                     messages.push(AgentMessage::Assistant {
                         content: None,
@@ -190,6 +202,13 @@ impl AgentService {
                             },
                         };
 
+                        tracing::debug!(
+                            iteration,
+                            tool = %tool_result.tool_name,
+                            result_preview = %truncate_for_event(&tool_result.content, 300),
+                            "ReAct: tool result"
+                        );
+
                         let truncated = truncate_for_event(&tool_result.content, 120);
                         let _ = progress_tx.try_send(AgentProgressEvent::ToolResult {
                             name: tool_result.tool_name.to_string(),
@@ -210,6 +229,7 @@ impl AgentService {
                         })
                         .collect();
                     if all_tool_results_failed(&recent_results) {
+                        tracing::debug!(iteration, "ReAct: all tools failed, nudging LLM");
                         messages.push(AgentMessage::User(
                             "All tool calls failed or timed out. \
                              Try rephrasing your query or using a different tool."
@@ -219,10 +239,20 @@ impl AgentService {
                 }
 
                 LlmToolResponse::Content(answer) => {
+                    tracing::debug!(
+                        iteration,
+                        answer_preview = %truncate_for_event(&answer, 300),
+                        "ReAct: LLM produced final answer"
+                    );
                     return Ok((answer, messages));
                 }
             }
         }
+
+        tracing::warn!(
+            max_iterations = self.config.max_iterations,
+            "ReAct: max iterations reached, attempting fallback synthesis"
+        );
 
         // Graceful fallback: synthesise a best-effort answer instead of a hard error.
         messages.push(AgentMessage::User(

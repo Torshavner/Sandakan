@@ -173,8 +173,12 @@ where
         let keep_alive_secs = state.settings.llm.sse_keep_alive_seconds;
 
         // Channel that carries the finished AgentChatResponse back to the SSE stream.
-        let (result_tx, mut result_rx) =
-            tokio::sync::oneshot::channel::<Result<crate::application::services::AgentChatResponse, crate::application::errors::AgentError>>();
+        let (result_tx, mut result_rx) = tokio::sync::oneshot::channel::<
+            Result<
+                crate::application::services::AgentChatResponse,
+                crate::application::errors::AgentError,
+            >,
+        >();
 
         tokio::spawn(async move {
             let _ = result_tx.send(service.chat(agent_request).await);

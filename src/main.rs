@@ -41,9 +41,9 @@ use sandakan::infrastructure::text_processing::{
     TextSplitterFactory, TextSplitters,
 };
 use sandakan::infrastructure::tools::{
-    InMemoryRagSourceCollector, NotificationAdapter, NotificationConfig, NotificationFormat,
-    RagSearchAdapter, SemanticToolRegistry, StaticToolRegistry, WebSearchAdapter, WebSearchConfig,
-    build_fs_tools,
+    GetFunctionSignaturesTool, InMemoryRagSourceCollector, ListDirectoryTool, NotificationAdapter,
+    NotificationConfig, NotificationFormat, RagSearchAdapter, ReadFileTool, SearchFilesTool,
+    SemanticToolRegistry, StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
 };
 use sandakan::presentation::config::ReflectionSettings;
 use sandakan::presentation::config::{NotificationFormat as ConfigNotificationFormat, ToolConfig};
@@ -551,15 +551,15 @@ async fn build_agent_service(
             }
             ToolConfig::Fs(cfg) => {
                 match build_fs_tools(&cfg.root_path, cfg.max_read_bytes, cfg.max_dir_entries) {
-                    Ok((list_tool, read_tool, search_tool)) => {
-                        schemas.push(
-                            sandakan::infrastructure::tools::ListDirectoryTool::tool_schema(),
-                        );
-                        schemas.push(sandakan::infrastructure::tools::ReadFileTool::tool_schema());
-                        schemas.push(sandakan::infrastructure::tools::SearchFilesTool::tool_schema());
+                    Ok((list_tool, read_tool, search_tool, sig_tool)) => {
+                        schemas.push(ListDirectoryTool::tool_schema());
+                        schemas.push(ReadFileTool::tool_schema());
+                        schemas.push(SearchFilesTool::tool_schema());
+                        schemas.push(GetFunctionSignaturesTool::tool_schema());
                         handlers.push(Arc::new(list_tool) as Arc<dyn ToolHandler>);
                         handlers.push(Arc::new(read_tool) as Arc<dyn ToolHandler>);
                         handlers.push(Arc::new(search_tool) as Arc<dyn ToolHandler>);
+                        handlers.push(Arc::new(sig_tool) as Arc<dyn ToolHandler>);
                         tracing::info!(root_path = %cfg.root_path, "Filesystem tools registered");
                     }
                     Err(e) => {

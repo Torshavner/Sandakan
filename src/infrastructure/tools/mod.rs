@@ -6,7 +6,9 @@ mod semantic_tool_registry;
 mod static_tool_registry;
 mod web_search_adapter;
 
-pub use fs_tool_adapter::{ListDirectoryTool, ReadFileTool, SearchFilesTool, build_fs_tools};
+pub use fs_tool_adapter::{
+    GetFunctionSignaturesTool, ListDirectoryTool, ReadFileTool, SearchFilesTool, build_fs_tools,
+};
 pub use in_memory_rag_source_collector::InMemoryRagSourceCollector;
 pub use notification_adapter::{
     NotificationAdapter, NotificationConfig, NotificationFormat,
