@@ -21,6 +21,17 @@ pub struct StreamingLlmClient {
     system_prompt_template: String,
 }
 
+impl StreamingLlmClient {
+    fn chat_url(&self) -> String {
+        if self.provider == "azure" {
+            // base_url already contains the full path + api-version query param
+            self.base_url.clone()
+        } else {
+            format!("{}/chat/completions", self.base_url)
+        }
+    }
+}
+
 // ─── RAG types (simple role + content only) ───────────────────────────────────
 
 #[derive(Serialize)]
@@ -251,7 +262,7 @@ impl LlmClient for StreamingLlmClient {
 
         let request = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(self.chat_url())
             .json(&request_body);
         let response = self
             .apply_auth(request)
@@ -301,7 +312,7 @@ impl LlmClient for StreamingLlmClient {
 
         let request = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(self.chat_url())
             .json(&request_body);
         let response = self
             .apply_auth(request)
@@ -367,7 +378,7 @@ impl LlmClient for StreamingLlmClient {
 
         let request = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(self.chat_url())
             .json(&request_body);
         let response = self
             .apply_auth(request)
@@ -446,7 +457,7 @@ impl LlmClient for StreamingLlmClient {
 
         let request = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(self.chat_url())
             .json(&request_body);
         let response = self
             .apply_auth(request)
@@ -526,7 +537,7 @@ pub fn create_streaming_llm_client(
                 )
             })?;
             format!(
-                "{}/openai/deployments/{}",
+                "{}/openai/deployments/{}/chat/completions?api-version=2024-02-01",
                 endpoint.trim_end_matches('/'),
                 settings.chat_model
             )

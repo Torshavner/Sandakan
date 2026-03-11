@@ -381,7 +381,9 @@ impl AgentService {
         // Budget for tool-call iterations within a single correction pass.
         const MAX_CORRECTION_TOOL_ITERATIONS: usize = 3;
 
-        for _ in 0..cfg.correction_budget {
+        for pass in 0..cfg.correction_budget {
+            tracing::debug!(pass, "Critic: calling LLM for reflection");
+
             let critic_prompt =
                 build_critic_prompt(&messages, &cfg.critic_system_prompt, &current_answer);
 
@@ -396,6 +398,15 @@ impl AgentService {
             let (score, issues) = parse_critic_response(&raw);
             let needs_correction = score < cfg.score_threshold;
 
+            tracing::debug!(
+                pass,
+                score,
+                threshold = cfg.score_threshold,
+                needs_correction,
+                issues = ?issues,
+                "Critic: reflection result"
+            );
+
             let _ = progress_tx.try_send(AgentProgressEvent::Reflection {
                 score,
                 needs_correction,
@@ -403,6 +414,7 @@ impl AgentService {
             });
 
             if !needs_correction {
+                tracing::debug!(pass, score, "Critic: score above threshold, accepting answer");
                 return Ok((current_answer, messages));
             }
 
@@ -415,17 +427,30 @@ impl AgentService {
 
             // The correction pass may need tools (e.g. re-query RAG). Run a
             // bounded mini-loop so we don't bail on the first ToolCalls response.
-            for _ in 0..MAX_CORRECTION_TOOL_ITERATIONS {
+            for correction_iter in 0..MAX_CORRECTION_TOOL_ITERATIONS {
+                tracing::debug!(pass, correction_iter, "Critic: correction LLM call");
                 match self
                     .llm_client
                     .complete_with_tools(&messages, &tools)
                     .await?
                 {
                     LlmToolResponse::Content(r) => {
+                        tracing::debug!(
+                            pass,
+                            correction_iter,
+                            answer_preview = %truncate_for_event(&r, 300),
+                            "Critic: correction answer produced"
+                        );
                         current_answer = r;
                         break;
                     }
                     LlmToolResponse::ToolCalls(calls) => {
+                        tracing::debug!(
+                            pass,
+                            correction_iter,
+                            calls = ?calls.iter().map(|c| format!("{}({})", c.name, c.arguments)).collect::<Vec<_>>(),
+                            "Critic: correction pass calling tools"
+                        );
                         messages.push(AgentMessage::Assistant {
                             content: None,
                             tool_calls: calls.clone(),
@@ -459,6 +484,7 @@ impl AgentService {
                 }
             }
 
+            tracing::debug!(pass, "Critic: correction applied");
             let _ = progress_tx.try_send(AgentProgressEvent::CorrectionApplied);
         }
 
