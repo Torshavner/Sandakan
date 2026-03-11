@@ -14,8 +14,9 @@ fn make_temp_tree() -> TempDir {
 }
 
 fn make_tools(dir: &TempDir) -> (ListDirectoryTool, ReadFileTool) {
-    build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200)
-        .expect("build_fs_tools should succeed for a valid directory")
+    let (list, read, _search) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200)
+        .expect("build_fs_tools should succeed for a valid directory");
+    (list, read)
 }
 
 // ─── list_directory tests ─────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ async fn given_max_entries_limit_when_listing_large_directory_then_truncates_wit
     for i in 0..5 {
         std::fs::write(dir.path().join(format!("file{i}.txt")), b"x").unwrap();
     }
-    let (list_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 3).unwrap();
+    let (list_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 3).unwrap();
 
     let result = list_tool.execute(&json!({ "path": "." })).await.unwrap();
 
@@ -103,7 +104,7 @@ async fn given_large_file_when_reading_then_content_is_truncated_with_notice() {
     let content = "A".repeat(100);
     std::fs::write(dir.path().join("big.txt"), content.as_bytes()).unwrap();
 
-    let (_, read_tool) = build_fs_tools(dir.path().to_str().unwrap(), 10, 200).unwrap();
+    let (_, read_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 10, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "big.txt" }))
@@ -136,7 +137,7 @@ async fn given_binary_file_when_reading_then_returns_binary_file_error() {
     let binary_data: Vec<u8> = vec![0x00, 0xFF, 0xFE, 0x80, 0x81, 0x82];
     std::fs::write(dir.path().join("data.bin"), &binary_data).unwrap();
 
-    let (_, read_tool) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool.execute(&json!({ "path": "data.bin" })).await;
 
@@ -157,7 +158,7 @@ async fn given_path_traversal_attempt_when_reading_file_then_returns_execution_f
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (_, read_tool) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     // Attempt to escape to the parent directory's secret file
     let result = read_tool.execute(&json!({ "path": "../secret.txt" })).await;
@@ -182,7 +183,7 @@ async fn given_path_traversal_attempt_when_listing_directory_then_returns_execut
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (list_tool, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (list_tool, _, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = list_tool.execute(&json!({ "path": ".." })).await;
 

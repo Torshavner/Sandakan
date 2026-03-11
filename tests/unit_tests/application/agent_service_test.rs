@@ -204,6 +204,7 @@ fn default_config() -> AgentServiceConfig {
         system_prompt: "You are a test agent.".to_string(),
         reflection: ReflectionSettings::default(),
         max_tool_results: 10,
+        dynamic_tools_description: false,
     }
 }
 
@@ -225,6 +226,7 @@ fn reflection_config(
             critic_system_prompt: "You are a critic.".to_string(),
         },
         max_tool_results: 10,
+        dynamic_tools_description: false,
     }
 }
 

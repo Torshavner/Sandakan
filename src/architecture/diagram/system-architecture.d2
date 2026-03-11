@@ -1,13 +1,13 @@
-title: Rust RAG Pipeline - System Architecture {
+title: Sandakan — AI Agentic RAG System Architecture {
   near: top-center
   shape: text
-  style.font-size: 20
+  style.font-size: 22
   style.bold: true
 }
 
 direction: right
 
-# Layer 4: Presentation
+# ─── Layer 4: Presentation ────────────────────────────────────────────────────
 presentation: Presentation Layer {
   style.fill: "#e3f2fd"
 
@@ -22,7 +22,11 @@ presentation: Presentation Layer {
       shape: rectangle
     }
 
-    chat: POST /v1/chat/completions\n(SSE Streaming) {
+    ingestRef: POST /api/v1/ingest-reference\n(URL Ingestion) {
+      shape: rectangle
+    }
+
+    chat: POST /v1/chat/completions\n(OpenAI-compat SSE) {
       shape: rectangle
     }
 
@@ -30,7 +34,15 @@ presentation: Presentation Layer {
       shape: rectangle
     }
 
-    jobs: "GET /api/v1/jobs/:id\n(Job Status)" {
+    agent: POST /api/v1/agent/chat\n(Agentic SSE) {
+      shape: rectangle
+    }
+
+    jobs: GET /api/v1/jobs/:id\n(Job Status) {
+      shape: rectangle
+    }
+
+    health: GET /health {
       shape: rectangle
     }
   }
@@ -39,19 +51,19 @@ presentation: Presentation Layer {
     shape: rectangle
   }
 
-  config: Settings\n(Typed Config) {
+  config: Settings\n(Typed Config + APP_* env) {
     shape: rectangle
   }
 }
 
-# Layer 3: Infrastructure
+# ─── Layer 3: Infrastructure ──────────────────────────────────────────────────
 infrastructure: Infrastructure Layer {
   style.fill: "#fff3e0"
 
   persistence: Persistence {
     style.fill: "#ffe0b2"
 
-    qdrant: Qdrant Adapter\n(gRPC) {
+    qdrant: QdrantAdapter\n(gRPC · dense+sparse) {
       shape: cylinder
     }
 
@@ -62,12 +74,24 @@ infrastructure: Infrastructure Layer {
     pgConv: PgConversationRepository\n(sqlx) {
       shape: cylinder
     }
+
+    pgEvalEvent: PgEvalEventRepository\n(sqlx) {
+      shape: cylinder
+    }
+
+    pgEvalOutbox: PgEvalOutboxRepository\n(sqlx · SKIP LOCKED) {
+      shape: cylinder
+    }
+
+    pgEvalResult: PgEvalResultRepository\n(sqlx) {
+      shape: cylinder
+    }
   }
 
   llm: LLM {
     style.fill: "#ffe0b2"
 
-    streaming: StreamingLlmClient\n(reqwest + SSE) {
+    streamingClient: StreamingLlmClient\n(reqwest + SSE) {
       shape: cloud
     }
 
@@ -87,7 +111,11 @@ infrastructure: Infrastructure Layer {
       shape: document
     }
 
-    openaiWhisper: OpenAiWhisperEngine\n(API) {
+    openaiWhisper: OpenAiWhisperEngine\n(API · verbose_json) {
+      shape: document
+    }
+
+    azureWhisper: AzureWhisperEngine\n(Azure STT) {
       shape: document
     }
 
@@ -99,21 +127,89 @@ infrastructure: Infrastructure Layer {
   textProc: Text Processing {
     style.fill: "#ffe0b2"
 
-    fileLoader: CompositeFileLoader\n(PDF + Text) {
+    fileLoader: CompositeFileLoader\n(PDF · Text · Audio · Video) {
       shape: document
     }
 
-    semanticSplit: SemanticSplitter\n(Similarity-based) {
+    semanticSplit: SemanticSplitter\n(Token-budget groups) {
       shape: document
     }
 
-    fixedSplit: RecursiveCharacterSplitter\n(Token-based) {
+    fixedSplit: RecursiveCharacterSplitter\n(Char-based) {
       shape: document
+    }
+
+    markdownSplit: MarkdownSemanticSplitter\n(Heading-aware) {
+      shape: document
+    }
+
+    bm25: Bm25SparseEmbedder\n(TF · FNV-1a hash) {
+      shape: document
+    }
+  }
+
+  tools: Tools {
+    style.fill: "#ffe0b2"
+
+    ragSearch: RagSearchAdapter\n(VectorStore query) {
+      shape: rectangle
+    }
+
+    fsTool: FsToolAdapter\n(read · list · search\nscoped to ./src) {
+      shape: rectangle
+    }
+
+    webSearch: WebSearchAdapter {
+      shape: rectangle
+    }
+
+    notification: NotificationAdapter {
+      shape: rectangle
+    }
+
+    staticRegistry: StaticToolRegistry\n(all tools listed) {
+      shape: rectangle
+    }
+
+    semanticRegistry: SemanticToolRegistry\n(dynamic via embedding) {
+      shape: rectangle
+    }
+  }
+
+  mcp: MCP Clients {
+    style.fill: "#ffe0b2"
+
+    stdio: StdioMcpClient\n(subprocess) {
+      shape: rectangle
+    }
+
+    sse: SseMcpClient\n(HTTP SSE) {
+      shape: rectangle
+    }
+
+    composite: CompositeMcpClient\n(fan-out) {
+      shape: rectangle
+    }
+  }
+
+  observability: Observability {
+    style.fill: "#ffe0b2"
+
+    tracing: InitTracing\n(OTLP → Tempo) {
+      shape: rectangle
+    }
+
+    correlationId: CorrelationId\n(request propagation) {
+      shape: rectangle
+    }
+
+    sanitizer: PromptSanitizer\n(PII redaction) {
+      shape: rectangle
     }
   }
 }
 
-# Layer 2: Application
+# ─── Layer 2: Application ─────────────────────────────────────────────────────
 application: Application Layer {
   style.fill: "#f3e5f5"
 
@@ -124,7 +220,7 @@ application: Application Layer {
       shape: diamond
     }
 
-    vectorStore: VectorStore {
+    vectorStore: VectorStore\n(search · search_hybrid\nupsert · upsert_hybrid) {
       shape: diamond
     }
 
@@ -132,15 +228,19 @@ application: Application Layer {
       shape: diamond
     }
 
+    sparseEmbedder: SparseEmbedder\n(BM25) {
+      shape: diamond
+    }
+
     llmClient: LlmClient {
       shape: diamond
     }
 
-    textSplitter: TextSplitter {
+    textSplitter: TextSplitter\n(split · split_segments) {
       shape: diamond
     }
 
-    transcription: TranscriptionEngine {
+    transcription: TranscriptionEngine\n(→ Vec<TranscriptSegment>) {
       shape: diamond
     }
 
@@ -151,20 +251,52 @@ application: Application Layer {
     convRepo: ConversationRepository {
       shape: diamond
     }
+
+    evalEventRepo: EvalEventRepository {
+      shape: diamond
+    }
+
+    evalOutboxRepo: EvalOutboxRepository {
+      shape: diamond
+    }
+
+    toolRegistry: ToolRegistry {
+      shape: diamond
+    }
+
+    ragSourceCollector: RagSourceCollector {
+      shape: diamond
+    }
+
+    mcpClientPort: McpClientPort {
+      shape: diamond
+    }
   }
 
   services: Services {
     style.fill: "#e1bee7"
 
-    ingestion: IngestionService\n(File -> Vectors) {
+    ingestion: IngestionService\n(Sync · file→vectors) {
       shape: rectangle
     }
 
-    worker: IngestionWorker\n(Async Background) {
+    worker: IngestionWorker\n(Async background\nmpsc channel) {
       shape: rectangle
     }
 
-    retrieval: RetrievalService\n(Query -> Answer) {
+    retrieval: RetrievalService\n(RAG · hybrid search\neval capture) {
+      shape: rectangle
+    }
+
+    agent: AgentService\n(ReAct loop · critic\nmax_iterations) {
+      shape: rectangle
+    }
+
+    evalWorker: EvalWorker\n(Background scoring\noutbox polling) {
+      shape: rectangle
+    }
+
+    evalMetrics: EvalMetrics\n(LLM-as-judge\nfaithfulness) {
       shape: rectangle
     }
 
@@ -174,14 +306,14 @@ application: Application Layer {
   }
 }
 
-# Layer 1: Domain
+# ─── Layer 1: Domain ──────────────────────────────────────────────────────────
 domain: Domain Layer {
   style.fill: "#e8f5e9"
 
   entities: Entities {
     style.fill: "#c8e6c9"
 
-    chunk: Chunk\n(ChunkId, DocumentId) {
+    chunk: Chunk\n(ChunkId · start_time) {
       shape: oval
     }
 
@@ -189,7 +321,11 @@ domain: Domain Layer {
       shape: oval
     }
 
-    job: Job\n(JobId, JobStatus) {
+    documentMetadata: DocumentMetadata\n(title · source_url\ncontent_type · Arc flyweight) {
+      shape: oval
+    }
+
+    job: Job\n(JobId · JobStatus) {
       shape: oval
     }
 
@@ -197,36 +333,57 @@ domain: Domain Layer {
       shape: oval
     }
 
-    message: Message\n(MessageId, MessageRole) {
+    message: Message\n(MessageRole · tool_call_id) {
       shape: oval
     }
 
-    embedding: Embedding\n(cosine similarity) {
+    toolCall: ToolCall\n(id · name · arguments) {
+      shape: oval
+    }
+
+    transcriptSegment: TranscriptSegment\n(text · start_time · end_time) {
+      shape: oval
+    }
+
+    evalEvent: EvalEvent\n(query · context · answer\nEvalOperationType) {
+      shape: oval
+    }
+
+    evalOutbox: EvalOutbox\n(status: pending→done/failed) {
+      shape: oval
+    }
+
+    evalResult: EvalResult\n(faithfulness score 0–1) {
       shape: oval
     }
   }
 }
 
-# External Systems
+# ─── External Systems ─────────────────────────────────────────────────────────
 external: External Systems {
   style.fill: "#ffebee"
 
-  qdrantDB: Qdrant\n(Vector Database) {
+  qdrantDB: Qdrant\n(Vector Database\ndense + sparse named vectors) {
     shape: cylinder
     style.stroke: "#d32f2f"
   }
 
-  postgres: PostgreSQL\n(Jobs + Conversations) {
+  postgres: PostgreSQL\n(Jobs · Conversations\nEval events · Outbox) {
     shape: cylinder
     style.stroke: "#d32f2f"
   }
 
-  openaiAPI: OpenAI API\n(Chat + Embeddings + Whisper) {
+  openaiAPI: OpenAI API\n(Chat · Embeddings · Whisper) {
     shape: cloud
     style.stroke: "#d32f2f"
   }
 
-  azureAPI: Azure OpenAI\n(Chat Completions) {
+  azureAPI: Azure OpenAI\n(Chat · Whisper · Doc Intelligence) {
+    shape: cloud
+    style.stroke: "#d32f2f"
+  }
+
+  lmStudio: LM Studio\n(Local LLM · VLM PDF) {
     shape: cloud
     style.stroke: "#d32f2f"
   }
@@ -235,28 +392,45 @@ external: External Systems {
     shape: cloud
     style.stroke: "#d32f2f"
   }
+
+  mcpServers: MCP Tool Servers\n(stdio / SSE) {
+    shape: cloud
+    style.stroke: "#d32f2f"
+  }
 }
 
-# Connections - Presentation to Handlers
+# ─── Presentation → Handlers ──────────────────────────────────────────────────
 presentation.api -> presentation.handlers.ingest
+presentation.api -> presentation.handlers.ingestRef
 presentation.api -> presentation.handlers.chat
 presentation.api -> presentation.handlers.query
+presentation.api -> presentation.handlers.agent
 presentation.api -> presentation.handlers.jobs
+presentation.api -> presentation.handlers.health
 
-# Connections - Infrastructure implements Application Ports
+# ─── Infrastructure implements Application Ports ──────────────────────────────
 infrastructure.persistence.qdrant -> application.ports.vectorStore: implements
 infrastructure.persistence.pgJob -> application.ports.jobRepo: implements
 infrastructure.persistence.pgConv -> application.ports.convRepo: implements
-infrastructure.llm.streaming -> application.ports.llmClient: implements
+infrastructure.persistence.pgEvalEvent -> application.ports.evalEventRepo: implements
+infrastructure.persistence.pgEvalOutbox -> application.ports.evalOutboxRepo: implements
+infrastructure.llm.streamingClient -> application.ports.llmClient: implements
 infrastructure.llm.openaiEmbed -> application.ports.embedder: implements
 infrastructure.llm.localEmbed -> application.ports.embedder: implements
 infrastructure.audio.candleWhisper -> application.ports.transcription: implements
 infrastructure.audio.openaiWhisper -> application.ports.transcription: implements
+infrastructure.audio.azureWhisper -> application.ports.transcription: implements
 infrastructure.textProc.fileLoader -> application.ports.fileLoader: implements
 infrastructure.textProc.semanticSplit -> application.ports.textSplitter: implements
 infrastructure.textProc.fixedSplit -> application.ports.textSplitter: implements
+infrastructure.textProc.markdownSplit -> application.ports.textSplitter: implements
+infrastructure.textProc.bm25 -> application.ports.sparseEmbedder: implements
+infrastructure.tools.staticRegistry -> application.ports.toolRegistry: implements
+infrastructure.tools.semanticRegistry -> application.ports.toolRegistry: implements
+infrastructure.tools.ragSearch -> application.ports.ragSourceCollector: implements
+infrastructure.mcp.composite -> application.ports.mcpClientPort: implements
 
-# Connections - Application Services to Ports
+# ─── Application Services → Ports ─────────────────────────────────────────────
 application.services.ingestion -> application.ports.fileLoader: uses
 application.services.ingestion -> application.ports.vectorStore: uses
 application.services.ingestion -> application.ports.embedder: uses
@@ -265,65 +439,126 @@ application.services.ingestion -> application.ports.textSplitter: uses
 application.services.worker -> application.ports.fileLoader: uses
 application.services.worker -> application.ports.vectorStore: uses
 application.services.worker -> application.ports.embedder: uses
+application.services.worker -> application.ports.sparseEmbedder: uses
 application.services.worker -> application.ports.textSplitter: uses
 application.services.worker -> application.ports.transcription: uses
 application.services.worker -> application.ports.jobRepo: uses
+application.services.worker -> application.ports.evalEventRepo: uses
+application.services.worker -> application.ports.evalOutboxRepo: uses
 
 application.services.retrieval -> application.ports.vectorStore: uses
 application.services.retrieval -> application.ports.llmClient: uses
 application.services.retrieval -> application.ports.embedder: uses
+application.services.retrieval -> application.ports.sparseEmbedder: uses
 application.services.retrieval -> application.ports.convRepo: uses
+application.services.retrieval -> application.ports.evalEventRepo: uses
+application.services.retrieval -> application.ports.evalOutboxRepo: uses
 
-# Connections - Services to Domain
+application.services.agent -> application.ports.llmClient: uses
+application.services.agent -> application.ports.toolRegistry: uses
+application.services.agent -> application.ports.ragSourceCollector: uses
+application.services.agent -> application.ports.mcpClientPort: uses
+application.services.agent -> application.ports.convRepo: uses
+
+application.services.evalWorker -> application.ports.evalOutboxRepo: uses
+application.services.evalWorker -> application.ports.evalEventRepo: uses
+application.services.evalWorker -> application.ports.llmClient: uses
+
+# ─── Services → Domain ────────────────────────────────────────────────────────
 application.services.ingestion -> domain.entities.chunk: creates
 application.services.ingestion -> domain.entities.document: creates
+application.services.ingestion -> domain.entities.documentMetadata: creates
 application.services.worker -> domain.entities.job: updates
+application.services.worker -> domain.entities.transcriptSegment: reads
 application.services.retrieval -> domain.entities.chunk: reads
 application.services.retrieval -> domain.entities.conversation: manages
 application.services.retrieval -> domain.entities.message: creates
+application.services.retrieval -> domain.entities.evalEvent: creates
+application.services.agent -> domain.entities.message: creates
+application.services.agent -> domain.entities.toolCall: creates
+application.services.evalWorker -> domain.entities.evalOutbox: updates
+application.services.evalWorker -> domain.entities.evalResult: creates
 
-# Connections - Infrastructure to External Systems
+# ─── Infrastructure → External Systems ───────────────────────────────────────
 infrastructure.persistence.qdrant -> external.qdrantDB: gRPC
 infrastructure.persistence.pgJob -> external.postgres: sqlx
 infrastructure.persistence.pgConv -> external.postgres: sqlx
-infrastructure.llm.streaming -> external.openaiAPI: HTTP/SSE
-infrastructure.llm.streaming -> external.azureAPI: HTTP/SSE
+infrastructure.persistence.pgEvalEvent -> external.postgres: sqlx
+infrastructure.persistence.pgEvalOutbox -> external.postgres: sqlx
+infrastructure.llm.streamingClient -> external.openaiAPI: HTTP/SSE
+infrastructure.llm.streamingClient -> external.azureAPI: HTTP/SSE
+infrastructure.llm.streamingClient -> external.lmStudio: HTTP/SSE
 infrastructure.llm.openaiEmbed -> external.openaiAPI: HTTP
-infrastructure.audio.openaiWhisper -> external.openaiAPI: HTTP
 infrastructure.llm.localEmbed -> external.hfHub: model download
+infrastructure.audio.openaiWhisper -> external.openaiAPI: HTTP
+infrastructure.audio.azureWhisper -> external.azureAPI: HTTP
 infrastructure.audio.candleWhisper -> external.hfHub: model download
+infrastructure.mcp.stdio -> external.mcpServers: subprocess
+infrastructure.mcp.sse -> external.mcpServers: SSE
 
-# Data Flow Annotations
+# ─── Data Flows ───────────────────────────────────────────────────────────────
 flows: Data Flows {
   near: bottom-left
   style.fill: "#fffef7"
 
-  ingestion: |md
-    **Ingestion:**
-    Upload -> Job(Queued) -> Async Worker
-    -> MediaExtraction -> Transcribe
-    -> Chunk -> Embed -> Store -> Completed
-  | {
+  ingestion: |`
+    Ingestion (Write Path):
+    Upload -> Job(Queued) -> mpsc -> IngestionWorker
+    -> CompositeFileLoader -> TextSplitter(+split_segments for media)
+    -> Embedder(dense) + SparseEmbedder(BM25)
+    -> VectorStore.upsert_hybrid -> Job(Completed)
+    + EvalEvent + EvalOutbox row (if eval.enabled)
+  `| {
     shape: text
     style.font-size: 11
   }
 
-  retrieval: |md
-    **Retrieval:**
-    Query -> Embed -> Search(Top-K)
-    -> Token Budget -> Augment -> Stream/Generate
-  | {
+  retrieval: |`
+    Retrieval (Read Path):
+    Query -> Embedder(dense) [+ SparseEmbedder if hybrid]
+    -> VectorStore.search [or search_hybrid -> RRF fusion]
+    -> Token-budget ranking -> Augment prompt
+    -> LlmClient -> SSE stream
+    + Fire-and-forget: EvalEvent + EvalOutbox (if eval.enabled)
+  `| {
+    shape: text
+    style.font-size: 11
+  }
+
+  agent: |`
+    Agentic Loop (ReAct):
+    AgentChatRequest -> AgentService
+    -> [Reason] LlmClient (tool_choice: auto)
+    -> [Act]    ToolRegistry.execute(tool_call)
+               -> RagSearchAdapter | FsToolAdapter | WebSearch | MCP
+    -> [Observe] append ToolResult to messages
+    -> repeat until finish_reason=stop or max_iterations
+    -> [Reflect] CriticEvaluator score (completeness, grounding, clarity)
+    -> SSE stream progress events to client
+  `| {
+    shape: text
+    style.font-size: 11
+  }
+
+  eval: |`
+    Eval Background Worker:
+    EvalOutbox(pending) -> FOR UPDATE SKIP LOCKED
+    -> EvalWorker.process_entry()
+    -> EvalMetrics.compute_faithfulness() (LLM-as-judge)
+    -> EvalResult persisted -> outbox row -> done/failed
+    + structured tracing event: eval.result {score, model}
+  `| {
     shape: text
     style.font-size: 11
   }
 }
 
-# Technology Stack
+# ─── Tech Stack ───────────────────────────────────────────────────────────────
 techStack: Tech Stack {
   near: bottom-right
   style.fill: "#fafafa"
 
-  stack: "tokio . axum . sqlx . Qdrant . serde . tracing . candle . symphonia . reqwest" {
+  stack: "tokio · axum · sqlx · qdrant-client · serde · tracing · candle · symphonia · reqwest · tiktoken-rs · fnv · hurl" {
     shape: text
     style.font-size: 11
   }

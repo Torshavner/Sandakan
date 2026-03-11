@@ -24,7 +24,7 @@ To prevent "Context Collapse," the system is partitioned into four distinct laye
 
 * **Role:** Defines **Ports (Traits)** and Services.
 * **Ports:** `VectorStore`, `Embedder`, `LlmClient`, `TextSplitter`, `TranscriptionEngine`, `EvalEventRepository`, `EvalOutboxRepository`.
-* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `EvalWorker` (Background scoring), `EvalRunner` (Offline CLI), `TokenCounter`.
+* **Services:** `IngestionService` (Sync flow), `RetrievalService` (RAG logic), `AgentService` (ReAct loop), `EvalWorker` (Background scoring), `EvalRunner` (Offline CLI), `TokenCounter`.
 * **Testing Bound:** Offline Unit/Integration tests using hand-written, in-memory mocks/stubs. No heavy macro frameworks.
 
 ### L3: Infrastructure (The Adapters)
@@ -51,12 +51,25 @@ The pipeline distinguishes between **Immediate API response** and **Deferred bac
 3. **Worker:** An `IngestionWorker` (Background Actor) consumes the task via `mpsc` channel.
 4. **Process:** Routing via `CompositeFileLoader` → `TextSplitter` → `Embedder` → `VectorStore`.
 
+### The Agentic Pipeline (ReAct Loop)
+
+1. **Entry:** `POST /api/v1/agent/chat` initiates `AgentService::run()`.
+2. **Reason:** LLM called with `tool_choice: auto`; if a tool call is returned, dispatch it.
+3. **Act:** `ToolRegistry` resolves the tool (RAG search, FS, web, MCP) and executes with a configurable timeout.
+4. **Observe:** Tool result appended to message history; loop repeats.
+5. **Terminate:** `finish_reason = stop`, no tool calls returned, or `max_iterations` reached.
+6. **Reflect:** `CriticEvaluator` scores the final answer (0.0–1.0) on completeness, grounding, and clarity.
+7. **Output:** Progress events streamed via SSE throughout.
+
+**Tool Registry modes:** `StaticToolRegistry` (fixed list) or `SemanticToolRegistry` (dynamic selection via embedding similarity, controlled by `agent.semantic_tools`). MCP tools are merged transparently via `CompositeMcpClient`.
+
 ### The Retrieval Pipeline (Read Path)
 
-1. **Search:** User query is converted to a vector.
-2. **Augmentation:** Context chunks are pulled from `VectorStore` based on similarity thresholds.
-3. **Generation:** Streamed tokens are returned via SSE (Server-Sent Events) using `tokio::select!` for keep-alive management.
-4. **Eval Capture (optional):** When `eval.enabled = true`, `RetrievalService` fire-and-forgets an `EvalEvent` record to `PgEvalEventRepository` and enqueues an `eval_outbox` row for background scoring.
+1. **Search:** User query is embedded (dense) and optionally sparse-embedded (BM25).
+2. **Vector Search:** `VectorStore.search()` (dense) or `search_hybrid()` (dense + sparse → Qdrant RRF fusion) when `qdrant.hybrid_search = true`.
+3. **Augmentation:** Context chunks ranked by token budget; metadata-enriched via `chunk.as_contextual_string()`.
+4. **Generation:** Streamed tokens returned via SSE using `tokio::select!` for keep-alive management.
+5. **Eval Capture (optional):** When `eval.enabled = true`, `RetrievalService` fire-and-forgets an `EvalEvent` + `eval_outbox` row for background scoring.
 
 ### Eval Background Worker
 
@@ -93,5 +106,9 @@ When modifying this architecture, the AI Agent must follow these state-managemen
 | **Database** | `PostgreSQL` + `sqlx` | Persistent state & job tracking. |
 | **Vector** | `Qdrant` | Semantic search & high-dimensional indexing. |
 | **Inference** | `candle` | Local, private embeddings & transcription. |
-| **Observability** | `tracing` | Structured logging with `request_id` propagation. |
+| **Sparse Search** | `Bm25SparseEmbedder` | TF tokenizer + FNV-1a hash → Qdrant sparse vectors. |
+| **Hybrid Fusion** | Qdrant RRF | `PrefetchQueryBuilder` + `Fusion::Rrf` merges dense & sparse. |
+| **Agent Loop** | ReAct + Critic | `AgentService`: Reason → Act → Observe; `CriticEvaluator` scores quality. |
+| **Tool Protocol** | MCP | `CompositeMcpClient` fans out to stdio/SSE MCP servers. |
+| **Observability** | `tracing` + OTLP | Structured logging + OpenTelemetry export to Tempo. |
 

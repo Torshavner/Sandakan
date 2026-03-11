@@ -121,17 +121,13 @@ where
             correlation_id: Some(correlation_id.0),
         };
 
-        match service.chat(agent_request).await {
-            Ok(response) => {
-                let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-                let model = request.model.clone();
-                let keep_alive_secs = state.settings.llm.sse_keep_alive_seconds;
-                let mut progress_rx = response.progress_rx;
-                let mut token_stream = response.token_stream;
-
-                // Non-streaming fallback: collect all tokens into a single response.
-                if request.stream != Some(true) {
+        // Non-streaming: run the agent synchronously and return a single JSON response.
+        if request.stream != Some(true) {
+            match service.chat(agent_request).await {
+                Ok(response) => {
+                    let model = request.model.clone();
                     let mut full_text = String::new();
+                    let mut token_stream = response.token_stream;
                     while let Some(result) = token_stream.next().await {
                         match result {
                             Ok(token) => full_text.push_str(&token),
@@ -153,69 +149,100 @@ where
                     let chat_response = ChatCompletionResponse::new(model, full_text);
                     return (StatusCode::OK, Json(chat_response)).into_response();
                 }
+                Err(e) => {
+                    tracing::error!(error = %e, "Agent chat failed");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: ChatError {
+                                message: format!("Agent failed: {}", e),
+                                r#type: "api_error".to_string(),
+                            },
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
 
-                let sse_stream = async_stream::stream! {
-                    let start_chunk = ChatCompletionChunk::new_start(&chunk_id, &model);
-                    let start_json = serde_json::to_string(&start_chunk).unwrap_or_default();
-                    yield Ok::<_, Infallible>(Event::default().data(start_json));
+        // Streaming: spawn the agent as a background task so the SSE response
+        // starts immediately. Progress events are forwarded as SSE comments so
+        // Open WebUI stays responsive during the (potentially long) ReAct loop.
+        let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        let model = request.model.clone();
+        let keep_alive_secs = state.settings.llm.sse_keep_alive_seconds;
 
-                    // Drain progress events — log them for observability, suppress from wire.
-                    // Open WebUI has no channel to display progress events.
+        // Channel that carries the finished AgentChatResponse back to the SSE stream.
+        let (result_tx, mut result_rx) =
+            tokio::sync::oneshot::channel::<Result<crate::application::services::AgentChatResponse, crate::application::errors::AgentError>>();
+
+        tokio::spawn(async move {
+            let _ = result_tx.send(service.chat(agent_request).await);
+        });
+
+        let sse_stream = async_stream::stream! {
+            let start_chunk = ChatCompletionChunk::new_start(&chunk_id, &model);
+            let start_json = serde_json::to_string(&start_chunk).unwrap_or_default();
+            yield Ok::<_, Infallible>(Event::default().data(start_json));
+
+            // Wait for the agent to finish, emitting keep-alive comments so the
+            // connection is not dropped by proxies or the browser.
+            let agent_result = loop {
+                tokio::select! {
+                    res = &mut result_rx => {
+                        break res.unwrap_or_else(|_| Err(crate::application::errors::AgentError::MaxIterationsExceeded(0)));
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(keep_alive_secs)) => {
+                        yield Ok(Event::default().comment("keep-alive"));
+                    }
+                }
+            };
+
+            match agent_result {
+                Err(e) => {
+                    tracing::error!(error = %e, "Agent chat failed (streaming)");
+                    // Emit an error token so the UI shows something meaningful.
+                    let err_chunk = ChatCompletionChunk::new_content(&chunk_id, &model, &format!("[Agent error: {e}]"));
+                    let err_json = serde_json::to_string(&err_chunk).unwrap_or_default();
+                    yield Ok(Event::default().data(err_json));
+                }
+                Ok(response) => {
+                    // Drain progress events for observability only.
+                    let mut progress_rx = response.progress_rx;
                     while let Ok(event) = progress_rx.try_recv() {
                         tracing::debug!(event = ?event, "Agent progress event");
                     }
 
-                    loop {
-                        tokio::select! {
-                            maybe_token = token_stream.next() => {
-                                match maybe_token {
-                                    Some(Ok(token)) => {
-                                        let chunk = ChatCompletionChunk::new_content(&chunk_id, &model, &token);
-                                        let json = serde_json::to_string(&chunk).unwrap_or_default();
-                                        yield Ok(Event::default().data(json));
-                                    }
-                                    Some(Err(e)) => {
-                                        tracing::error!(error = %e, "Agent token stream error");
-                                        break;
-                                    }
-                                    None => {
-                                        let done_chunk = ChatCompletionChunk::new_done(&chunk_id, &model);
-                                        let done_json = serde_json::to_string(&done_chunk).unwrap_or_default();
-                                        yield Ok(Event::default().data(done_json));
-                                        yield Ok(Event::default().data("[DONE]"));
-                                        break;
-                                    }
-                                }
+                    let mut token_stream = response.token_stream;
+                    while let Some(result) = token_stream.next().await {
+                        match result {
+                            Ok(token) => {
+                                let chunk = ChatCompletionChunk::new_content(&chunk_id, &model, &token);
+                                let json = serde_json::to_string(&chunk).unwrap_or_default();
+                                yield Ok(Event::default().data(json));
                             }
-                            _ = tokio::time::sleep(Duration::from_secs(keep_alive_secs)) => {
-                                yield Ok(Event::default().comment("keep-alive"));
+                            Err(e) => {
+                                tracing::error!(error = %e, "Agent token stream error");
+                                break;
                             }
                         }
                     }
-                };
+                }
+            }
 
-                Sse::new(sse_stream)
-                    .keep_alive(
-                        axum::response::sse::KeepAlive::new()
-                            .interval(Duration::from_secs(keep_alive_secs))
-                            .text("keep-alive"),
-                    )
-                    .into_response()
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Agent chat failed");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: ChatError {
-                            message: format!("Agent failed: {}", e),
-                            r#type: "api_error".to_string(),
-                        },
-                    }),
-                )
-                    .into_response()
-            }
-        }
+            let done_chunk = ChatCompletionChunk::new_done(&chunk_id, &model);
+            let done_json = serde_json::to_string(&done_chunk).unwrap_or_default();
+            yield Ok(Event::default().data(done_json));
+            yield Ok(Event::default().data("[DONE]"));
+        };
+
+        Sse::new(sse_stream)
+            .keep_alive(
+                axum::response::sse::KeepAlive::new()
+                    .interval(Duration::from_secs(keep_alive_secs))
+                    .text("keep-alive"),
+            )
+            .into_response()
     } else if request.stream == Some(true) {
         match state
             .retrieval_service
