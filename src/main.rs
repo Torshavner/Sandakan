@@ -195,7 +195,8 @@ fn load_settings() -> anyhow::Result<(Environment, Settings)> {
         )
         .add_source(
             EnvironmentSource::with_prefix("APP")
-                .separator("_")
+                .prefix_separator("_")
+                .separator("__")
                 .list_separator(" "),
         )
         .build()?;
