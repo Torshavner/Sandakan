@@ -706,7 +706,7 @@ async fn given_agentic_run_without_trace_when_worker_processes_then_fallback_fla
 
 #[tokio::test]
 async fn given_agentic_run_with_empty_tool_calls_when_worker_processes_then_context_precision_is_none()
-{
+ {
     let event_id = EvalEventId::new();
     let event = agentic_eval_event_with_empty_trace(event_id);
     let entry = EvalOutboxEntry::new(event_id);

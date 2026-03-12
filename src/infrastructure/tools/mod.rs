@@ -1,5 +1,6 @@
 mod fs_tool_adapter;
 mod in_memory_rag_source_collector;
+mod linkedin_adapter;
 mod notification_adapter;
 mod rag_search_adapter;
 mod semantic_tool_registry;
@@ -10,6 +11,7 @@ pub use fs_tool_adapter::{
     GetFunctionSignaturesTool, ListDirectoryTool, ReadFileTool, SearchFilesTool, build_fs_tools,
 };
 pub use in_memory_rag_source_collector::InMemoryRagSourceCollector;
+pub use linkedin_adapter::{LinkedInAdapter, LinkedInConfig, LinkedInMimicAdapter, build_ugc_post};
 pub use notification_adapter::{
     NotificationAdapter, NotificationConfig, NotificationFormat,
     build_body as build_notification_body,

@@ -17,6 +17,8 @@ pub enum ChatMode {
 ///   `{ "type": "web_search", "api_key": "...", "max_results": 5 }`
 ///   `{ "type": "notification", "webhook_url": "...", "format": "slack" }`
 ///   `{ "type": "fs", "root_path": "./src" }`
+///   `{ "type": "linked_in", "access_token": "...", "author_urn": "urn:li:person:xxx" }`
+///   `{ "type": "linked_in_mimic" }`
 ///
 /// External MCP servers:
 ///   `{ "type": "mcp_stdio", "name": "github", "command": "npx", "args": [...], "env": {...} }`
@@ -28,6 +30,8 @@ pub enum ToolConfig {
     WebSearch(WebSearchConfig),
     Notification(NotificationConfig),
     Fs(FsConfig),
+    LinkedIn(LinkedInToolConfig),
+    LinkedInMimic,
     McpStdio(McpStdioConfig),
     McpSse(McpSseConfig),
 }
@@ -94,6 +98,21 @@ fn default_max_read_bytes() -> usize {
 
 fn default_max_dir_entries() -> usize {
     200
+}
+
+// ─── LinkedIn tool ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LinkedInToolConfig {
+    pub access_token: String,
+    /// LinkedIn URN identifying the author, e.g. `"urn:li:person:xxxx"`.
+    pub author_urn: String,
+    #[serde(default = "default_linkedin_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_linkedin_timeout() -> u64 {
+    15
 }
 
 // ─── MCP transports ───────────────────────────────────────────────────────────

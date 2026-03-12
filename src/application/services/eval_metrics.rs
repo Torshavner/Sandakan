@@ -317,7 +317,11 @@ pub async fn generate_eval_description(
         scores = scores,
     );
 
-    tracing::debug!(operation_type, tool_call_count, "generate_eval_description calling LLM");
+    tracing::debug!(
+        operation_type,
+        tool_call_count,
+        "generate_eval_description calling LLM"
+    );
     let raw = judge
         .complete(&prompt, "")
         .instrument(tracing::debug_span!("judge.eval_description"))

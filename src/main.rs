@@ -41,9 +41,10 @@ use sandakan::infrastructure::text_processing::{
     TextSplitterFactory, TextSplitters,
 };
 use sandakan::infrastructure::tools::{
-    GetFunctionSignaturesTool, InMemoryRagSourceCollector, ListDirectoryTool, NotificationAdapter,
-    NotificationConfig, NotificationFormat, RagSearchAdapter, ReadFileTool, SearchFilesTool,
-    SemanticToolRegistry, StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
+    GetFunctionSignaturesTool, InMemoryRagSourceCollector, LinkedInAdapter, LinkedInConfig,
+    LinkedInMimicAdapter, ListDirectoryTool, NotificationAdapter, NotificationConfig,
+    NotificationFormat, RagSearchAdapter, ReadFileTool, SearchFilesTool, SemanticToolRegistry,
+    StaticToolRegistry, WebSearchAdapter, WebSearchConfig, build_fs_tools,
 };
 use sandakan::presentation::config::ReflectionSettings;
 use sandakan::presentation::config::{NotificationFormat as ConfigNotificationFormat, ToolConfig};
@@ -450,27 +451,25 @@ fn spawn_workers(
                 Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
 
             let judge_llm_settings = settings.eval.judge.as_ref().unwrap_or(&settings.llm);
-            let judge: Arc<dyn LlmClient> = match create_streaming_llm_client(
-                judge_llm_settings,
-                String::new(),
-            ) {
-                Ok(c) => {
-                    tracing::info!(
-                        provider = %judge_llm_settings.provider,
-                        model = %judge_llm_settings.chat_model,
-                        dedicated_judge = settings.eval.judge.is_some(),
-                        "Eval judge initialized"
-                    );
-                    Arc::new(c)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to build dedicated eval judge; falling back to main LLM client"
-                    );
-                    llm_client.clone() as Arc<dyn LlmClient>
-                }
-            };
+            let judge: Arc<dyn LlmClient> =
+                match create_streaming_llm_client(judge_llm_settings, String::new()) {
+                    Ok(c) => {
+                        tracing::info!(
+                            provider = %judge_llm_settings.provider,
+                            model = %judge_llm_settings.chat_model,
+                            dedicated_judge = settings.eval.judge.is_some(),
+                            "Eval judge initialized"
+                        );
+                        Arc::new(c)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to build dedicated eval judge; falling back to main LLM client"
+                        );
+                        llm_client.clone() as Arc<dyn LlmClient>
+                    }
+                };
 
             let eval_worker = EvalWorker::new(
                 outbox_repo.clone(),
@@ -591,6 +590,27 @@ async fn build_agent_service(
                         tracing::error!(error = %e, "Failed to initialize fs tools");
                     }
                 }
+            }
+            ToolConfig::LinkedIn(cfg) => {
+                match LinkedInAdapter::new(LinkedInConfig {
+                    access_token: cfg.access_token.clone(),
+                    author_urn: cfg.author_urn.clone(),
+                    timeout_secs: cfg.timeout_secs,
+                }) {
+                    Ok(adapter) => {
+                        schemas.push(LinkedInAdapter::tool_schema());
+                        handlers.push(Arc::new(adapter) as Arc<dyn ToolHandler>);
+                        tracing::info!("LinkedIn post tool registered");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize LinkedIn tool");
+                    }
+                }
+            }
+            ToolConfig::LinkedInMimic => {
+                schemas.push(LinkedInAdapter::tool_schema());
+                handlers.push(Arc::new(LinkedInMimicAdapter) as Arc<dyn ToolHandler>);
+                tracing::info!("LinkedIn mimic tool registered");
             }
             ToolConfig::McpStdio(cfg) => {
                 tracing::info!(name = %cfg.name, command = %cfg.command, "Connecting to stdio MCP server");

@@ -153,7 +153,11 @@ struct UdpLayer {
 }
 
 impl<S: Subscriber> Layer<S> for UdpLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let mut visitor = JsonVisitor::default();
         event.record(&mut visitor);
 
