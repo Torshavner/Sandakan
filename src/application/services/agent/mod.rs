@@ -1,4 +1,5 @@
 mod agent_service;
+pub(crate) mod context_manager;
 mod react_helpers;
 mod schema;
 

@@ -73,9 +73,7 @@ pub(super) fn extract_signatures(text: &str, ext: &str) -> Vec<String> {
             r"^\s*(public|private|protected|static|final|abstract|synchronized|\s)*(void|\w+)\s+\w+\s*\(",
         ],
         "c" | "cpp" | "cc" | "h" | "hpp" => &[r"^\s*(\w[\w\s\*&:<>]*)\s+\w+\s*\([^;]*$"],
-        _ => &[
-            r"^\s*(?!(?:if|for|while|switch|catch)\s*\()[a-zA-Z_]\w*\s*\(",
-        ],
+        _ => &[r"^\s*(?!(?:if|for|while|switch|catch)\s*\()[a-zA-Z_]\w*\s*\("],
     };
 
     let compiled: Vec<Regex> = patterns.iter().filter_map(|p| Regex::new(p).ok()).collect();

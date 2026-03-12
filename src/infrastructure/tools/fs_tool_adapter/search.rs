@@ -19,11 +19,30 @@ impl FsToolInner {
         let regex = Regex::new(pattern)
             .map_err(|e| McpError::ExecutionFailed(format!("invalid regex: {e}")))?;
 
-        let max_matches = args["max_matches"].as_u64().unwrap_or(50) as usize;
+        let max_matches = args["max_matches"].as_u64().unwrap_or(10) as usize;
         let context_lines = args["context_lines"].as_u64().unwrap_or(0) as usize;
+        let files_only = args["files_only"].as_bool().unwrap_or(false);
 
         let root = self.root.clone();
         let max_read_bytes = self.max_read_bytes;
+
+        if files_only {
+            let files = tokio::task::spawn_blocking(move || {
+                files_matching(&search_root, &root, &regex, max_matches, max_read_bytes)
+            })
+            .await
+            .map_err(|e| McpError::ExecutionFailed(format!("search task failed: {e}")))?;
+
+            if files.is_empty() {
+                return Ok(format!("No files matching pattern: {pattern}"));
+            }
+            return Ok(format!(
+                "{} file(s) matching `{}`:\n{}",
+                files.len(),
+                pattern,
+                files.join("\n")
+            ));
+        }
 
         let matches = tokio::task::spawn_blocking(move || {
             search_with_ignore(
@@ -49,6 +68,61 @@ impl FsToolInner {
             ))
         }
     }
+}
+
+/// Returns only the relative file paths that contain at least one match, up to `max_files`.
+fn files_matching(
+    search_root: &std::path::Path,
+    root: &std::path::Path,
+    regex: &Regex,
+    max_files: usize,
+    max_read_bytes: usize,
+) -> Vec<String> {
+    use std::io::BufRead;
+
+    let mut result: Vec<String> = Vec::new();
+
+    let walker = ignore::WalkBuilder::new(search_root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .build();
+
+    for entry in walker.flatten() {
+        if result.len() >= max_files {
+            break;
+        }
+        let path = entry.path();
+        if !path.starts_with(root) || path.is_dir() {
+            continue;
+        }
+        let size = match std::fs::metadata(path) {
+            Ok(m) => m.len() as usize,
+            Err(_) => continue,
+        };
+        if size > max_read_bytes {
+            continue;
+        }
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let found = std::io::BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .any(|line| regex.is_match(&line));
+        if found {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            result.push(rel);
+        }
+    }
+    result
 }
 
 fn search_with_ignore(

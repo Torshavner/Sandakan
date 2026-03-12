@@ -118,10 +118,10 @@ impl SearchFilesTool {
         ToolSchema {
             name: "search_files".to_string(),
             description: "Search for a regex pattern across all files under the configured root. \
-                Returns matching lines with file path and line number. \
-                Optionally includes surrounding context lines. \
-                Respects .gitignore and skips hidden files. \
-                Use this to find function definitions, struct names, or any keyword."
+                By default returns matching lines with file path and line number (max 10). \
+                Set files_only=true to return only the file paths that contain a match — \
+                much cheaper for locating relevant files before reading them with read_file. \
+                Respects .gitignore and skips hidden files."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -136,11 +136,15 @@ impl SearchFilesTool {
                     },
                     "max_matches": {
                         "type": "integer",
-                        "description": "Maximum number of matching lines to return (default 50)."
+                        "description": "Maximum number of results to return (default 10)."
                     },
                     "context_lines": {
                         "type": "integer",
-                        "description": "Number of lines to show before and after each match (default 0)."
+                        "description": "Number of lines to show before and after each match (default 0). Ignored when files_only=true."
+                    },
+                    "files_only": {
+                        "type": "boolean",
+                        "description": "When true, return only file paths that contain a match — no line numbers or content. Use this first to locate files cheaply, then read_file to inspect them."
                     }
                 },
                 "required": ["pattern"]
@@ -173,7 +177,7 @@ impl GetFunctionSignaturesTool {
     }
 }
 
-/// Constructs a quadruple of `(ListDirectoryTool, ReadFileTool, SearchFilesTool, GetFunctionSignaturesTool)` sharing one inner.
+/// Constructs all four fs tools sharing one `FsToolInner`.
 pub fn build_fs_tools(
     root_path: &str,
     max_read_bytes: usize,
@@ -243,3 +247,4 @@ impl ToolHandler for GetFunctionSignaturesTool {
         self.0.get_function_signatures(arguments).await
     }
 }
+

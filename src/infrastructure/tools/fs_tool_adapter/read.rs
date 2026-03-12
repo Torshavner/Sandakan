@@ -51,6 +51,14 @@ impl FsToolInner {
             )));
         }
 
+        if start > end {
+            return Err(McpError::ExecutionFailed(format!(
+                "start_line ({}) must not be greater than end_line ({})",
+                start + 1,
+                end
+            )));
+        }
+
         let selected: Vec<String> = lines[start..end]
             .iter()
             .enumerate()

@@ -633,6 +633,8 @@ async fn build_agent_service(
         },
         max_tool_results: settings.agent.max_tool_results,
         dynamic_tools_description: settings.agent.dynamic_tools_description,
+        max_context_tokens: settings.agent.max_context_tokens,
+        smart_pruning: settings.agent.smart_pruning,
     };
 
     let svc = Arc::new(AgentService::new(

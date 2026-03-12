@@ -205,6 +205,8 @@ fn default_config() -> AgentServiceConfig {
         reflection: ReflectionSettings::default(),
         max_tool_results: 10,
         dynamic_tools_description: false,
+        max_context_tokens: 42_000,
+        smart_pruning: false,
     }
 }
 
@@ -227,6 +229,8 @@ fn reflection_config(
         },
         max_tool_results: 10,
         dynamic_tools_description: false,
+        max_context_tokens: 42_000,
+        smart_pruning: false,
     }
 }
 

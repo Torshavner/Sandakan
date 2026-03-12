@@ -260,10 +260,7 @@ impl LlmClient for StreamingLlmClient {
             stream: None,
         };
 
-        let request = self
-            .client
-            .post(self.chat_url())
-            .json(&request_body);
+        let request = self.client.post(self.chat_url()).json(&request_body);
         let response = self
             .apply_auth(request)
             .send()
@@ -310,10 +307,7 @@ impl LlmClient for StreamingLlmClient {
             stream: Some(true),
         };
 
-        let request = self
-            .client
-            .post(self.chat_url())
-            .json(&request_body);
+        let request = self.client.post(self.chat_url()).json(&request_body);
         let response = self
             .apply_auth(request)
             .send()
@@ -376,10 +370,7 @@ impl LlmClient for StreamingLlmClient {
             stream: true,
         };
 
-        let request = self
-            .client
-            .post(self.chat_url())
-            .json(&request_body);
+        let request = self.client.post(self.chat_url()).json(&request_body);
         let response = self
             .apply_auth(request)
             .send()
@@ -455,10 +446,7 @@ impl LlmClient for StreamingLlmClient {
             temperature: self.temperature,
         };
 
-        let request = self
-            .client
-            .post(self.chat_url())
-            .json(&request_body);
+        let request = self.client.post(self.chat_url()).json(&request_body);
         let response = self
             .apply_auth(request)
             .send()

@@ -186,6 +186,15 @@ pub struct AgentSettings {
     /// do not reliably infer available tools from the API schema alone.
     #[serde(default)]
     pub dynamic_tools_description: bool,
+    /// Maximum tokens allowed in the message context before auto-pruning
+    /// oldest tool-call/result pairs. Default ~80% of 53k context window.
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: usize,
+    /// When true, calls the LLM to score tool results by relevance before
+    /// pruning, discarding least-useful results first instead of oldest-first.
+    /// When false (default), uses simple oldest-first pruning.
+    #[serde(default)]
+    pub smart_pruning: bool,
 }
 
 fn default_agent_system_prompt() -> String {
@@ -204,6 +213,10 @@ fn default_max_tool_results() -> usize {
     5
 }
 
+fn default_max_context_tokens() -> usize {
+    42_000
+}
+
 // ─── Service config (single source of truth for AgentService construction) ───
 
 /// Bootstrap-time configuration consumed by `AgentService::new()`.
@@ -217,6 +230,8 @@ pub struct AgentServiceConfig {
     pub reflection: ReflectionSettings,
     pub max_tool_results: usize,
     pub dynamic_tools_description: bool,
+    pub max_context_tokens: usize,
+    pub smart_pruning: bool,
 }
 
 impl Default for AgentSettings {
@@ -233,6 +248,8 @@ impl Default for AgentSettings {
             semantic_tools: false,
             max_tool_results: default_max_tool_results(),
             dynamic_tools_description: false,
+            max_context_tokens: default_max_context_tokens(),
+            smart_pruning: false,
         }
     }
 }

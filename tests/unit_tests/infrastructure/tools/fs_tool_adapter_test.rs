@@ -145,7 +145,8 @@ async fn given_binary_file_when_reading_then_returns_binary_file_error() {
     let binary_data: Vec<u8> = vec![0x00, 0xFF, 0xFE, 0x80, 0x81, 0x82];
     std::fs::write(dir.path().join("data.bin"), &binary_data).unwrap();
 
-    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool.execute(&json!({ "path": "data.bin" })).await;
 
@@ -159,7 +160,8 @@ async fn given_start_and_end_line_when_reading_file_then_returns_only_selected_l
     let dir = tempfile::tempdir().unwrap();
     let content = "line1\nline2\nline3\nline4\nline5";
     std::fs::write(dir.path().join("lines.txt"), content.as_bytes()).unwrap();
-    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "lines.txt", "start_line": 2, "end_line": 4 }))
@@ -177,7 +179,8 @@ async fn given_start_and_end_line_when_reading_file_then_returns_only_selected_l
 async fn given_only_start_line_when_reading_file_then_returns_from_start_to_end_of_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("f.txt"), b"a\nb\nc\nd").unwrap();
-    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "f.txt", "start_line": 3 }))
@@ -195,7 +198,8 @@ async fn given_start_line_beyond_file_length_when_reading_then_returns_execution
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("short.txt"), b"only one line").unwrap();
-    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "short.txt", "start_line": 99 }))
@@ -211,7 +215,8 @@ async fn given_context_lines_when_searching_files_then_returns_surrounding_lines
     let dir = tempfile::tempdir().unwrap();
     let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
     std::fs::write(dir.path().join("ctx.txt"), content.as_bytes()).unwrap();
-    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "gamma", "context_lines": 1 }))
@@ -227,7 +232,8 @@ async fn given_context_lines_when_searching_files_then_returns_surrounding_lines
 async fn given_no_context_lines_when_searching_files_then_returns_only_matching_lines() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("exact.txt"), b"foo\nbar\nbaz").unwrap();
-    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "bar" }))
@@ -316,7 +322,8 @@ async fn given_path_traversal_attempt_when_reading_file_then_returns_execution_f
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (_, read_tool, _, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) =
+        build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool.execute(&json!({ "path": "../secret.txt" })).await;
 
@@ -339,7 +346,8 @@ async fn given_path_traversal_attempt_when_listing_directory_then_returns_execut
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (list_tool, _, _, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (list_tool, _, _, _) =
+        build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = list_tool.execute(&json!({ "path": ".." })).await;
 
@@ -422,8 +430,14 @@ async fn given_depth_two_when_listing_directory_then_returns_nested_tree_entries
         .await
         .unwrap();
 
-    assert!(result.contains("nested.txt"), "expected nested.txt in tree output: {result}");
-    assert!(result.contains("subdir"), "expected subdir in tree output: {result}");
+    assert!(
+        result.contains("nested.txt"),
+        "expected nested.txt in tree output: {result}"
+    );
+    assert!(
+        result.contains("subdir"),
+        "expected subdir in tree output: {result}"
+    );
 }
 
 #[tokio::test]
@@ -436,7 +450,10 @@ async fn given_depth_exceeds_max_when_listing_then_depth_is_clamped_to_max_tree_
         .execute(&json!({ "path": ".", "depth": 999 }))
         .await;
 
-    assert!(result.is_ok(), "expected Ok even with huge depth: {result:?}");
+    assert!(
+        result.is_ok(),
+        "expected Ok even with huge depth: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -444,14 +461,14 @@ async fn given_default_depth_when_listing_directory_then_returns_flat_list_only(
     let dir = make_temp_tree(); // subdir/nested.txt exists
     let (list_tool, _, _, _) = make_tools(&dir);
 
-    let result = list_tool
-        .execute(&json!({ "path": "." }))
-        .await
-        .unwrap();
+    let result = list_tool.execute(&json!({ "path": "." })).await.unwrap();
 
     // Default depth=1: subdir appears but nested.txt should NOT be in output
     assert!(result.contains("subdir"), "subdir should appear");
-    assert!(!result.contains("nested.txt"), "nested.txt should not appear at depth=1");
+    assert!(
+        !result.contains("nested.txt"),
+        "nested.txt should not appear at depth=1"
+    );
 }
 
 // ─── search_files gitignore and size cap tests ────────────────────────────────
@@ -462,15 +479,22 @@ async fn given_gitignore_excludes_file_when_searching_then_excluded_file_not_in_
     std::fs::write(dir.path().join("included.txt"), b"find_me here").unwrap();
     std::fs::write(dir.path().join("excluded.txt"), b"find_me here").unwrap();
     std::fs::write(dir.path().join(".gitignore"), b"excluded.txt\n").unwrap();
-    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) =
+        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "find_me" }))
         .await
         .unwrap();
 
-    assert!(result.contains("included.txt"), "included.txt should be found");
-    assert!(!result.contains("excluded.txt"), "excluded.txt should be ignored by .gitignore");
+    assert!(
+        result.contains("included.txt"),
+        "included.txt should be found"
+    );
+    assert!(
+        !result.contains("excluded.txt"),
+        "excluded.txt should be ignored by .gitignore"
+    );
 }
 
 #[tokio::test]
@@ -486,13 +510,17 @@ async fn given_file_exceeds_max_read_bytes_when_searching_then_file_is_skipped()
         .await
         .unwrap();
 
-    assert!(result.contains("No matches"), "large file should be skipped: {result}");
+    assert!(
+        result.contains("No matches"),
+        "large file should be skipped: {result}"
+    );
 }
 
 // ─── get_function_signatures broadened Rust patterns ─────────────────────────
 
 #[tokio::test]
-async fn given_rust_file_with_structs_and_enums_when_getting_signatures_then_returns_type_definitions() {
+async fn given_rust_file_with_structs_and_enums_when_getting_signatures_then_returns_type_definitions()
+ {
     let dir = tempfile::tempdir().unwrap();
     let src = b"pub struct Foo {\n    x: i32,\n}\n\npub enum Bar {\n    A,\n    B,\n}\n\ntype Alias = i32;\n";
     std::fs::write(dir.path().join("types.rs"), src).unwrap();
@@ -503,9 +531,15 @@ async fn given_rust_file_with_structs_and_enums_when_getting_signatures_then_ret
         .await
         .unwrap();
 
-    assert!(result.contains("struct Foo"), "expected struct Foo: {result}");
+    assert!(
+        result.contains("struct Foo"),
+        "expected struct Foo: {result}"
+    );
     assert!(result.contains("enum Bar"), "expected enum Bar: {result}");
-    assert!(result.contains("type Alias"), "expected type Alias: {result}");
+    assert!(
+        result.contains("type Alias"),
+        "expected type Alias: {result}"
+    );
 }
 
 #[tokio::test]
@@ -520,7 +554,13 @@ async fn given_rust_file_with_impl_blocks_when_getting_signatures_then_returns_i
         .await
         .unwrap();
 
-    assert!(result.contains("trait MyTrait"), "expected trait MyTrait: {result}");
-    assert!(result.contains("impl MyTrait"), "expected impl MyTrait: {result}");
+    assert!(
+        result.contains("trait MyTrait"),
+        "expected trait MyTrait: {result}"
+    );
+    assert!(
+        result.contains("impl MyTrait"),
+        "expected impl MyTrait: {result}"
+    );
     assert!(result.contains("impl Foo"), "expected impl Foo: {result}");
 }

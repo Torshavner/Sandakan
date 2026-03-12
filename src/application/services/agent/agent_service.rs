@@ -15,6 +15,7 @@ use crate::application::ports::{
 use crate::domain::{Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName};
 use crate::presentation::config::AgentServiceConfig;
 
+use super::context_manager::{auto_prune_if_needed, smart_prune_if_needed};
 use super::react_helpers::{
     all_tool_results_failed, build_critic_prompt, parse_critic_response, truncate_for_event,
 };
@@ -156,6 +157,21 @@ impl AgentService {
                     .tool_registry
                     .search_tools(current_intent, self.config.max_tool_results)
                     .await;
+
+                // Auto-prune oldest tool messages if approaching context limit.
+                let pruned = if self.config.smart_pruning {
+                    smart_prune_if_needed(
+                        &mut messages,
+                        self.config.max_context_tokens,
+                        self.llm_client.as_ref(),
+                    )
+                    .await
+                } else {
+                    auto_prune_if_needed(&mut messages, self.config.max_context_tokens)
+                };
+                if pruned > 0 {
+                    tracing::info!(pruned, "ReAct: pruned tool messages");
+                }
 
                 tracing::Span::current().record("tool_count", tools.len());
                 tracing::debug!(
@@ -495,6 +511,19 @@ impl AgentService {
                 // The correction pass may need tools (e.g. re-query RAG). Run a
                 // bounded mini-loop so we don't bail on the first ToolCalls response.
                 for correction_iter in 0..MAX_CORRECTION_TOOL_ITERATIONS {
+                    let pruned = if self.config.smart_pruning {
+                        smart_prune_if_needed(
+                            &mut messages,
+                            self.config.max_context_tokens,
+                            self.llm_client.as_ref(),
+                        )
+                        .await
+                    } else {
+                        auto_prune_if_needed(&mut messages, self.config.max_context_tokens)
+                    };
+                    if pruned > 0 {
+                        tracing::info!(pruned, "Critic: pruned tool messages");
+                    }
                     tracing::debug!(pass, correction_iter, "Critic: correction LLM call");
                     match self
                         .llm_client
