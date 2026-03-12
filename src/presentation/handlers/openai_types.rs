@@ -10,6 +10,8 @@ pub struct ChatCompletionRequest {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub stream: Option<bool>,
+    #[serde(default)]
+    pub chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

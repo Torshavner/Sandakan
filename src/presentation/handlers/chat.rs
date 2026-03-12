@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
 use futures::stream::StreamExt;
@@ -8,9 +8,9 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::time::Duration;
 
-use crate::application::ports::{FileLoader, LlmClient, VectorStore};
+use crate::application::ports::{ConversationRepository, FileLoader, LlmClient, VectorStore};
 use crate::application::services::AgentChatRequest;
-use crate::domain::{ConversationId, Message, MessageRole};
+use crate::domain::{Conversation, ConversationId, Message, MessageRole};
 use crate::infrastructure::observability::{CorrelationId, sanitize_prompt};
 use crate::presentation::config::ChatMode;
 use crate::presentation::state::AppState;
@@ -18,6 +18,24 @@ use crate::presentation::state::AppState;
 use super::openai_types::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse};
 
 const AGENT_MODEL_ID: &str = "agent-pipeline";
+
+async fn resolve_conversation_id(
+    chat_id: &str,
+    repo: &dyn ConversationRepository,
+) -> Option<ConversationId> {
+    let uuid = uuid::Uuid::parse_str(chat_id).ok()?;
+    let conv_id = ConversationId::from_uuid(uuid);
+
+    // create_conversation uses ON CONFLICT DO NOTHING, so this is safe to call
+    // on every request — it's a no-op when the row already exists.
+    let mut conv = Conversation::new(None);
+    conv.id = conv_id;
+    if let Err(e) = repo.create_conversation(&conv).await {
+        tracing::warn!(error = %e, %chat_id, "Failed to ensure conversation exists");
+        return None;
+    }
+    Some(conv_id)
+}
 
 #[derive(Serialize)]
 pub struct ErrorResponse {
@@ -53,6 +71,7 @@ fn should_use_agent(
 pub async fn chat_completions_handler<F, L, V>(
     State(state): State<AppState<F, L, V>>,
     Extension(correlation_id): Extension<CorrelationId>,
+    headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse
 where
@@ -84,6 +103,20 @@ where
             .into_response();
     }
 
+    // Resolve the stable conversation ID.
+    // Open WebUI sends `chat_id` in the request body; the `X-OpenWebUI-Chat-Id`
+    // header is accepted as a fallback for other clients.
+    let raw_chat_id = request.chat_id.clone().or_else(|| {
+        headers
+            .get("x-openwebui-chat-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    });
+    let conversation_id = match raw_chat_id.as_deref() {
+        Some(id) => resolve_conversation_id(id, state.conversation_repository.as_ref()).await,
+        None => None,
+    };
+
     let agent_service = state.agent_service.clone();
     let use_agent = should_use_agent(
         &request,
@@ -107,13 +140,6 @@ where
                     .into_response();
             }
         };
-
-        let conversation_id = request.messages.iter().find_map(|m| {
-            // Carry forward conversation_id if the client embeds it in a system message metadata.
-            // Standard path: no existing conversation — AgentService creates one.
-            let _ = m;
-            None::<ConversationId>
-        });
 
         let agent_request = AgentChatRequest {
             conversation_id,
@@ -250,7 +276,7 @@ where
     } else if request.stream == Some(true) {
         match state
             .retrieval_service
-            .query_stream(&user_message, None)
+            .query_stream(&user_message, conversation_id)
             .await
         {
             Ok(streaming_response) => {
@@ -339,7 +365,7 @@ where
     } else {
         match state
             .retrieval_service
-            .query(&user_message, None, Some(correlation_id.0))
+            .query(&user_message, conversation_id, Some(correlation_id.0))
             .await
         {
             Ok(response) => {

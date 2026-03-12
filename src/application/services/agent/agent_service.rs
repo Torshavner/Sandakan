@@ -95,7 +95,7 @@ impl AgentService {
         user_message: String,
         conversation_id: ConversationId,
         progress_tx: &tokio::sync::mpsc::Sender<AgentProgressEvent>,
-    ) -> Result<(String, Vec<AgentMessage>), AgentError> {
+    ) -> Result<(String, Vec<AgentMessage>, usize), AgentError> {
         let history = self
             .conversation_repository
             .get_messages(conversation_id, 50)
@@ -121,6 +121,8 @@ impl AgentService {
         let mut messages: Vec<AgentMessage> = std::iter::once(AgentMessage::System(system_prompt))
             .chain(history.into_iter().map(AgentMessage::from))
             .collect();
+        // Record where history ends so persist_turn only saves new messages.
+        let history_end = messages.len();
         messages.push(AgentMessage::User(user_message));
 
         let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
@@ -313,7 +315,7 @@ impl AgentService {
             match outcome? {
                 IterOutcome::Done(answer) => {
                     tracing::Span::current().record("iteration_count", iteration + 1);
-                    return Ok((answer, messages));
+                    return Ok((answer, messages, history_end));
                 }
                 IterOutcome::Continue => {}
             }
@@ -332,7 +334,7 @@ impl AgentService {
                 .to_string(),
         ));
         match self.llm_client.complete_with_tools(&messages, &[]).await? {
-            LlmToolResponse::Content(answer) => Ok((answer, messages)),
+            LlmToolResponse::Content(answer) => Ok((answer, messages, history_end)),
             _ => Err(AgentError::MaxIterationsExceeded(
                 self.config.max_iterations,
             )),
@@ -666,7 +668,7 @@ impl AgentServicePort for AgentService {
         // Bounded channel — progress events are cheap and numerous, 64 slots is ample.
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(64);
 
-        let (candidate_answer, candidate_messages) = self
+        let (candidate_answer, candidate_messages, history_end) = self
             .run_react_loop(request.user_message.clone(), conversation_id, &progress_tx)
             .await?;
 
@@ -682,11 +684,13 @@ impl AgentServicePort for AgentService {
         // Drop sender so the handler's drain loop sees the channel as closed.
         drop(progress_tx);
 
+        // Only persist the new-turn messages; history_end is the index after
+        // which new messages begin, so we skip re-appending loaded history.
         self.persist_turn(
             conversation_id,
             &request.user_message,
             &answer,
-            &final_messages,
+            &final_messages[history_end..],
         )
         .await;
 

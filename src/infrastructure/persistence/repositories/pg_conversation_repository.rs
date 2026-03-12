@@ -31,6 +31,7 @@ impl ConversationRepository for PgConversationRepository {
             r#"
             INSERT INTO conversations (id, title, created_at, updated_at)
             VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id) DO NOTHING
             "#,
             conversation_id,
             conversation.title,
