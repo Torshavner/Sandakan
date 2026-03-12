@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let tracing_config = TracingConfig {
         environment: std::env::var("APP_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
-        json_format: settings.logging.enable_json || settings.logging.enable_udp,
+        json_format: settings.logging.enable_json,
         tempo_endpoint: settings.logging.tempo_endpoint.clone(),
         udp_endpoint,
     };
