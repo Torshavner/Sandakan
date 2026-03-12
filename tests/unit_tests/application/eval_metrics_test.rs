@@ -3,7 +3,7 @@ use sandakan::application::ports::{
 };
 use sandakan::application::services::eval_metrics::{
     compute_agentic_faithfulness, compute_answer_relevancy, compute_context_precision,
-    compute_context_recall, compute_correctness, compute_faithfulness,
+    compute_context_recall, compute_correctness, compute_faithfulness, generate_eval_description,
 };
 use sandakan::domain::{Embedding, EvalSource, ToolCallTrace};
 
@@ -312,4 +312,27 @@ async fn given_empty_sources_when_computing_context_precision_then_returns_zero(
         .await
         .unwrap();
     assert!((score - 0.0).abs() < f32::EPSILON);
+}
+
+// -- Eval Description ---------------------------------------------------------
+
+#[tokio::test]
+async fn given_valid_scores_when_generating_eval_description_then_returns_non_empty_string() {
+    let judge = MockJudge {
+        response: "AgenticRun: agent executed 2 tool calls and answered the question with high faithfulness."
+            .to_string(),
+    };
+    let description = generate_eval_description(
+        &judge,
+        "agentic_run",
+        "What PDF classes handle ingestion?",
+        "LmStudioVlmPdfAdapter handles ingestion.",
+        0.9,
+        Some(1.0),
+        Some(0.6),
+        2,
+    )
+    .await
+    .unwrap();
+    assert!(!description.is_empty());
 }

@@ -668,6 +668,9 @@ async fn given_agentic_run_with_tool_trace_when_worker_processes_then_result_per
     assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
     assert!(saved[0].answer_relevancy.is_some());
     assert!(saved[0].context_precision.is_some());
+    assert!(!saved[0].question.is_empty());
+    assert!(!saved[0].generated_answer.is_empty());
+    assert!(!saved[0].eval_description.is_empty());
 }
 
 #[tokio::test]

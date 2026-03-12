@@ -4,21 +4,21 @@ use uuid::Uuid;
 #[test]
 fn given_faithfulness_above_threshold_when_result_created_then_below_threshold_is_false() {
     let event_id = EvalEventId::from_uuid(Uuid::new_v4());
-    let result = EvalResult::new(event_id, 0.9, None, None, None, None, 0.7);
+    let result = EvalResult::new(event_id, "q".into(), "a".into(), "d".into(), 0.9, None, None, None, None, 0.7);
     assert!(!result.below_threshold);
 }
 
 #[test]
 fn given_faithfulness_below_threshold_when_result_created_then_below_threshold_is_true() {
     let event_id = EvalEventId::from_uuid(Uuid::new_v4());
-    let result = EvalResult::new(event_id, 0.5, None, None, None, None, 0.7);
+    let result = EvalResult::new(event_id, "q".into(), "a".into(), "d".into(), 0.5, None, None, None, None, 0.7);
     assert!(result.below_threshold);
 }
 
 #[test]
 fn given_faithfulness_equal_to_threshold_when_result_created_then_below_threshold_is_false() {
     let event_id = EvalEventId::from_uuid(Uuid::new_v4());
-    let result = EvalResult::new(event_id, 0.7, None, None, None, None, 0.7);
+    let result = EvalResult::new(event_id, "q".into(), "a".into(), "d".into(), 0.7, None, None, None, None, 0.7);
     assert!(!result.below_threshold);
 }
 
@@ -27,6 +27,9 @@ fn given_eval_result_when_serialized_to_json_then_round_trips_correctly() {
     let event_id = EvalEventId::from_uuid(Uuid::new_v4());
     let result = EvalResult::new(
         event_id,
+        "What is chunking?".into(),
+        "Chunking splits text into segments.".into(),
+        "Query evaluated for faithfulness.".into(),
         0.85,
         Some(0.9),
         Some(0.8),
@@ -48,7 +51,7 @@ fn given_eval_result_when_serialized_to_json_then_round_trips_correctly() {
 #[test]
 fn given_eval_result_without_optional_metrics_when_serialized_then_optional_fields_are_null() {
     let event_id = EvalEventId::from_uuid(Uuid::new_v4());
-    let result = EvalResult::new(event_id, 0.5, None, None, None, None, 0.7);
+    let result = EvalResult::new(event_id, "q".into(), "a".into(), "d".into(), 0.5, None, None, None, None, 0.7);
     let json = serde_json::to_string(&result).expect("serialization failed");
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse failed");
     assert!(value["answer_relevancy"].is_null());

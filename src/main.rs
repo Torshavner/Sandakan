@@ -449,11 +449,34 @@ fn spawn_workers(
             let result_repo: Arc<dyn EvalResultRepository> =
                 Arc::new(PgEvalResultRepository::new(pg_pool.clone()));
 
+            let judge_llm_settings = settings.eval.judge.as_ref().unwrap_or(&settings.llm);
+            let judge: Arc<dyn LlmClient> = match create_streaming_llm_client(
+                judge_llm_settings,
+                String::new(),
+            ) {
+                Ok(c) => {
+                    tracing::info!(
+                        provider = %judge_llm_settings.provider,
+                        model = %judge_llm_settings.chat_model,
+                        dedicated_judge = settings.eval.judge.is_some(),
+                        "Eval judge initialized"
+                    );
+                    Arc::new(c)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to build dedicated eval judge; falling back to main LLM client"
+                    );
+                    llm_client.clone() as Arc<dyn LlmClient>
+                }
+            };
+
             let eval_worker = EvalWorker::new(
                 outbox_repo.clone(),
                 event_repo.clone(),
                 result_repo,
-                llm_client.clone() as Arc<dyn LlmClient>,
+                judge,
                 settings.eval.faithfulness_threshold,
                 std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
                 settings.eval.worker_batch_size,

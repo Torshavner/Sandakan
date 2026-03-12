@@ -144,8 +144,24 @@ impl EvalWorker {
         .await
         .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
 
+        let eval_description = eval_metrics::generate_eval_description(
+            self.judge.as_ref(),
+            event.operation_type.as_str(),
+            &event.question,
+            &event.generated_answer,
+            faithfulness,
+            Some(answer_relevancy),
+            Some(context_precision),
+            0,
+        )
+        .await
+        .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
         let result = EvalResult::new(
             entry.eval_event_id,
+            event.question.clone(),
+            event.generated_answer.clone(),
+            eval_description,
             faithfulness,
             Some(answer_relevancy),
             Some(context_precision),
@@ -238,8 +254,30 @@ impl EvalWorker {
         .await
         .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
 
+        let tool_call_count = event
+            .agentic_trace
+            .as_ref()
+            .map(|t| t.tool_calls.len())
+            .unwrap_or(0);
+
+        let eval_description = eval_metrics::generate_eval_description(
+            self.judge.as_ref(),
+            event.operation_type.as_str(),
+            &event.question,
+            &event.generated_answer,
+            faithfulness,
+            Some(answer_relevancy),
+            context_precision,
+            tool_call_count,
+        )
+        .await
+        .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
         let result = EvalResult::new(
             entry.eval_event_id,
+            event.question.clone(),
+            event.generated_answer.clone(),
+            eval_description,
             faithfulness,
             Some(answer_relevancy),
             context_precision,
@@ -287,8 +325,17 @@ impl EvalWorker {
         let chunk_count: usize = event.generated_answer.parse().unwrap_or(0);
         let faithfulness = if chunk_count > 0 { 1.0_f32 } else { 0.0_f32 };
 
+        let eval_description = format!(
+            "{}: {} chunk(s) ingested.",
+            event.operation_type.as_str(),
+            chunk_count
+        );
+
         let result = EvalResult::new(
             entry.eval_event_id,
+            event.question.clone(),
+            event.generated_answer.clone(),
+            eval_description,
             faithfulness,
             None,
             None,

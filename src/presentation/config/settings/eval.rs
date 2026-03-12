@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use super::LlmSettings;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct EvalSettings {
     #[serde(default)]
@@ -10,6 +12,10 @@ pub struct EvalSettings {
     pub worker_poll_interval_secs: u64,
     #[serde(default = "default_batch_size")]
     pub worker_batch_size: usize,
+    /// Optional dedicated LLM config for the eval judge.
+    /// When absent the main `llm` settings are used as the judge.
+    #[serde(default)]
+    pub judge: Option<LlmSettings>,
 }
 
 fn default_faithfulness_threshold() -> f32 {
@@ -31,6 +37,7 @@ impl Default for EvalSettings {
             faithfulness_threshold: default_faithfulness_threshold(),
             worker_poll_interval_secs: default_poll_interval(),
             worker_batch_size: default_batch_size(),
+            judge: None,
         }
     }
 }

@@ -275,6 +275,58 @@ fn build_faithfulness_prompt(generated_answer: &str) -> String {
     )
 }
 
+/// Generates a concise 1-2 sentence human-readable description of an eval run.
+/// Summarises what happened (operation type, tool calls) and what the scores mean.
+/// Returns the trimmed LLM response directly — no score parsing.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_eval_description(
+    judge: &dyn LlmClient,
+    operation_type: &str,
+    question: &str,
+    generated_answer: &str,
+    faithfulness: f32,
+    answer_relevancy: Option<f32>,
+    context_precision: Option<f32>,
+    tool_call_count: usize,
+) -> Result<String, LlmClientError> {
+    let scores = {
+        let mut parts = vec![format!("faithfulness={faithfulness:.2}")];
+        if let Some(ar) = answer_relevancy {
+            parts.push(format!("answer_relevancy={ar:.2}"));
+        }
+        if let Some(cp) = context_precision {
+            parts.push(format!("context_precision={cp:.2}"));
+        }
+        parts.join(", ")
+    };
+
+    let prompt = format!(
+        "You are an evaluation summariser. Write exactly 1-2 plain-English sentences (max 500 characters) \
+         describing what was evaluated and what the scores indicate. Be specific and factual. \
+         Do not include the raw numbers — integrate them naturally into the description.\n\n\
+         Operation: {operation_type}\n\
+         Question: {question}\n\
+         Answer (first 300 chars): {answer_preview}\n\
+         Tool calls made: {tool_call_count}\n\
+         Scores: {scores}\n\n\
+         Summary:",
+        operation_type = operation_type,
+        question = question,
+        answer_preview = &generated_answer[..generated_answer.len().min(300)],
+        tool_call_count = tool_call_count,
+        scores = scores,
+    );
+
+    tracing::debug!(operation_type, tool_call_count, "generate_eval_description calling LLM");
+    let raw = judge
+        .complete(&prompt, "")
+        .instrument(tracing::debug_span!("judge.eval_description"))
+        .await?;
+    tracing::debug!(raw_response = %raw.trim(), "generate_eval_description raw response");
+
+    Ok(raw.trim().to_string())
+}
+
 /// Parses the first valid f32 in `[0.0, 1.0]` found anywhere in `raw`.
 /// Scans all whitespace-separated tokens so that responses like
 /// `"Assistant: 0.5"` or `"Score: 0.85"` are handled correctly.

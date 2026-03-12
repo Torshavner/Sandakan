@@ -162,6 +162,7 @@ services:
       - ./grafana-provisioning:/etc/grafana/provisioning
     networks:
       - monitoring-net
+      - rag-network
     labels:
       - logging="true"
     depends_on:

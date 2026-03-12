@@ -35,6 +35,9 @@ impl std::fmt::Display for EvalResultId {
 
 /// Persisted outcome of one LLM-as-judge evaluation run for a single `EvalEvent`.
 ///
+/// `question`, `generated_answer`, and `eval_description` are snapshot copies from the
+/// originating `EvalEvent` so this row is fully self-contained without a JOIN.
+///
 /// `context_recall` and `correctness` are `None` when no ground-truth is available.
 /// `answer_relevancy` and `context_precision` are populated on the online path for
 /// Query and AgenticRun events; `None` for ingestion events.
@@ -44,6 +47,9 @@ impl std::fmt::Display for EvalResultId {
 pub struct EvalResult {
     pub id: EvalResultId,
     pub eval_event_id: EvalEventId,
+    pub question: String,
+    pub generated_answer: String,
+    pub eval_description: String,
     pub faithfulness: f32,
     pub answer_relevancy: Option<f32>,
     pub context_precision: Option<f32>,
@@ -54,8 +60,12 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         eval_event_id: EvalEventId,
+        question: String,
+        generated_answer: String,
+        eval_description: String,
         faithfulness: f32,
         answer_relevancy: Option<f32>,
         context_precision: Option<f32>,
@@ -66,6 +76,9 @@ impl EvalResult {
         Self {
             id: EvalResultId::new(),
             eval_event_id,
+            question,
+            generated_answer,
+            eval_description,
             faithfulness,
             answer_relevancy,
             context_precision,
