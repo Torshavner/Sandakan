@@ -3,6 +3,7 @@ pub struct TracingConfig {
     pub environment: String,
     pub json_format: bool,
     pub tempo_endpoint: Option<String>,
+    pub udp_endpoint: Option<String>,
 }
 
 impl Default for TracingConfig {
@@ -13,6 +14,7 @@ impl Default for TracingConfig {
                 .map(|v| v.to_lowercase() == "json")
                 .unwrap_or(false),
             tempo_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            udp_endpoint: None,
         }
     }
 }

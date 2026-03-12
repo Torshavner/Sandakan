@@ -57,10 +57,16 @@ const INGESTION_CHANNEL_CAPACITY: usize = 64;
 async fn main() -> anyhow::Result<()> {
     let (environment, settings) = load_settings()?;
 
+    let udp_endpoint = if settings.logging.enable_udp {
+        Some("127.0.0.1:9000".to_string())
+    } else {
+        None
+    };
     let tracing_config = TracingConfig {
         environment: std::env::var("APP_ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
-        json_format: settings.logging.enable_json,
+        json_format: settings.logging.enable_json || settings.logging.enable_udp,
         tempo_endpoint: settings.logging.tempo_endpoint.clone(),
+        udp_endpoint,
     };
     let otel_provider = init_tracing(tracing_config, settings.server.port);
 
