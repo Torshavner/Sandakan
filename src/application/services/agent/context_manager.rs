@@ -12,7 +12,8 @@ fn estimate_message_tokens(msg: &AgentMessage) -> usize {
             let t: usize = tool_calls
                 .iter()
                 .map(|tc| {
-                    let args = serde_json::to_string(&tc.arguments).unwrap_or_else(|_| String::new());
+                    let args =
+                        serde_json::to_string(&tc.arguments).unwrap_or_else(|_| String::new());
                     count_tokens(tc.name.as_str()) + count_tokens(&args)
                 })
                 .sum();
@@ -138,10 +139,8 @@ pub(crate) async fn smart_prune_if_needed(
         }
     };
 
-    let mut scores: std::collections::HashMap<usize, u8> = candidates
-        .iter()
-        .map(|(idx, _)| (*idx, 3u8))
-        .collect();
+    let mut scores: std::collections::HashMap<usize, u8> =
+        candidates.iter().map(|(idx, _)| (*idx, 3u8)).collect();
 
     for line in raw.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -173,7 +172,10 @@ pub(crate) async fn smart_prune_if_needed(
         messages.remove(idx);
     }
 
-    tracing::debug!(removed, "Smart prune: removed lowest-relevance tool messages");
+    tracing::debug!(
+        removed,
+        "Smart prune: removed lowest-relevance tool messages"
+    );
     removed
 }
 

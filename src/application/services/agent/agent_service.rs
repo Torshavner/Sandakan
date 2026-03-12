@@ -12,7 +12,10 @@ use crate::application::ports::{
     LlmClientError, LlmTokenStream, LlmToolResponse, McpClientPort, McpError, RagSourceCollector,
     ToolRegistry,
 };
-use crate::domain::{Conversation, ConversationId, EvalEvent, Message, MessageRole, ToolName};
+use crate::domain::{
+    AgenticTrace, Conversation, ConversationId, EvalEvent, EvalSource, Message, MessageRole,
+    ToolCallTrace, ToolName,
+};
 use crate::presentation::config::AgentServiceConfig;
 
 use super::context_manager::{auto_prune_if_needed, smart_prune_if_needed};
@@ -389,15 +392,23 @@ impl AgentService {
         }
     }
 
-    fn fire_and_forget_eval(&self, question: &str, answer: &str, correlation_id: Option<String>) {
+    fn fire_and_forget_eval(
+        &self,
+        question: &str,
+        answer: &str,
+        correlation_id: Option<String>,
+        extra_sources: Vec<EvalSource>,
+        agentic_trace: Option<AgenticTrace>,
+    ) {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
-            let sources = self
+            let mut sources = self
                 .rag_source_collector
                 .as_ref()
                 .map(|c| c.drain())
                 .unwrap_or_default();
+            sources.extend(extra_sources);
 
             let eval_event = EvalEvent::new_agentic(
                 question,
@@ -405,6 +416,7 @@ impl AgentService {
                 sources,
                 &self.config.model_config,
                 correlation_id,
+                agentic_trace,
             );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
@@ -434,17 +446,20 @@ impl AgentService {
     ///
     /// Gracefully degrades: any failure to parse the critic response is treated
     /// as score = 1.0 so the original answer is returned unchanged.
+    /// Returns `(answer, messages, reflection_score, reflection_issues)`.
     async fn reflect_and_correct(
         &self,
         candidate_answer: String,
         mut messages: Vec<AgentMessage>,
         progress_tx: &tokio::sync::mpsc::Sender<AgentProgressEvent>,
-    ) -> Result<(String, Vec<AgentMessage>), AgentError> {
+    ) -> Result<(String, Vec<AgentMessage>, Option<f32>, Vec<String>), AgentError> {
         let cfg = &self.config.reflection;
 
         let mut current_answer = candidate_answer;
         let tools = self.tool_registry.list_tools();
         let timeout_dur = Duration::from_secs(self.config.tool_timeout_secs);
+        let mut last_reflection_score: Option<f32> = None;
+        let mut last_reflection_issues: Vec<String> = Vec::new();
 
         // Budget for tool-call iterations within a single correction pass.
         const MAX_CORRECTION_TOOL_ITERATIONS: usize = 3;
@@ -478,6 +493,10 @@ impl AgentService {
 
                 let (score, issues) = parse_critic_response(&raw);
                 let needs_correction = score < cfg.score_threshold;
+
+                // Record the latest critic outcome so chat() can attach it to the eval trace.
+                last_reflection_score = Some(score);
+                last_reflection_issues = issues.clone();
 
                 tracing::Span::current().record("score", score);
                 tracing::Span::current().record("needs_correction", needs_correction);
@@ -604,12 +623,24 @@ impl AgentService {
             .await;
 
             match pass_result? {
-                PassOutcome::Accept => return Ok((current_answer, messages)),
+                PassOutcome::Accept => {
+                    return Ok((
+                        current_answer,
+                        messages,
+                        last_reflection_score,
+                        last_reflection_issues,
+                    ));
+                }
                 PassOutcome::Corrected => {}
             }
         }
 
-        Ok((current_answer, messages))
+        Ok((
+            current_answer,
+            messages,
+            last_reflection_score,
+            last_reflection_issues,
+        ))
     }
 }
 
@@ -639,12 +670,14 @@ impl AgentServicePort for AgentService {
             .run_react_loop(request.user_message.clone(), conversation_id, &progress_tx)
             .await?;
 
-        let (answer, final_messages) = if self.config.reflection.enabled {
-            self.reflect_and_correct(candidate_answer, candidate_messages, &progress_tx)
-                .await?
-        } else {
-            (candidate_answer, candidate_messages)
-        };
+        let (answer, final_messages, reflection_score, reflection_issues) =
+            if self.config.reflection.enabled {
+                self.reflect_and_correct(candidate_answer, candidate_messages, &progress_tx)
+                    .await?
+            } else {
+                let (a, m) = (candidate_answer, candidate_messages);
+                (a, m, None, Vec::new())
+            };
 
         // Drop sender so the handler's drain loop sees the channel as closed.
         drop(progress_tx);
@@ -657,10 +690,82 @@ impl AgentServicePort for AgentService {
         )
         .await;
 
+        // Build the eval trace from the ReAct message history.
+        let agentic_trace = {
+            use std::collections::HashMap;
+            // First pass: collect call_id → arguments mapping from all Assistant messages.
+            let call_args: HashMap<String, String> = final_messages
+                .iter()
+                .filter_map(|m| match m {
+                    AgentMessage::Assistant {
+                        content: None,
+                        tool_calls: calls,
+                    } => Some(calls),
+                    _ => None,
+                })
+                .flatten()
+                .map(|c| {
+                    let args = c.arguments.to_string();
+                    (c.id.as_str().to_string(), args)
+                })
+                .collect();
+
+            let mut tool_call_traces: Vec<ToolCallTrace> = Vec::new();
+            let mut iteration_count: usize = 0;
+
+            for msg in &final_messages {
+                match msg {
+                    AgentMessage::Assistant {
+                        content: None,
+                        tool_calls: calls,
+                    } if !calls.is_empty() => {
+                        iteration_count += 1;
+                    }
+                    AgentMessage::ToolResult(result) => {
+                        let success = !result.content.starts_with("[tool_error]")
+                            && !result.content.starts_with("[tool_timeout]");
+                        let arguments = call_args
+                            .get(result.tool_call_id.as_str())
+                            .cloned()
+                            .unwrap_or_default();
+                        tool_call_traces.push(ToolCallTrace {
+                            tool_name: result.tool_name.as_str().to_string(),
+                            arguments,
+                            result_preview: truncate_for_event(&result.content, 2000),
+                            success,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            Some(AgenticTrace {
+                iterations: iteration_count,
+                tool_calls: tool_call_traces,
+                reflection_score,
+                reflection_issues,
+            })
+        };
+
+        // Collect tool result contents as eval sources so the judge has full grounding context.
+        let tool_sources: Vec<EvalSource> = final_messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::ToolResult(r) => Some(EvalSource {
+                    text: r.content.clone(),
+                    page: None,
+                    score: 1.0,
+                }),
+                _ => None,
+            })
+            .collect();
+
         self.fire_and_forget_eval(
             &request.user_message,
             &answer,
             request.correlation_id.clone(),
+            tool_sources,
+            agentic_trace,
         );
 
         // Fake-stream the already-buffered answer by splitting on whitespace.

@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use crate::application::ports::{
-    Embedder, EmbedderError, FileLoader, FileLoaderError, JobRepository, RepositoryError,
-    SparseEmbedder, TextSplitter, TextSplitterError, VectorStore, VectorStoreError,
+    Embedder, EmbedderError, EvalEventRepository, EvalOutboxRepository, FileLoader,
+    FileLoaderError, JobRepository, RepositoryError, SparseEmbedder, TextSplitter,
+    TextSplitterError, VectorStore, VectorStoreError,
 };
-use crate::domain::{ContentType, Document, DocumentId, DocumentMetadata, Job, JobStatus};
+use crate::domain::{
+    ContentType, Document, DocumentId, DocumentMetadata, EvalEvent, EvalOperationType, Job,
+    JobStatus,
+};
 
 pub struct IngestionService<F, V>
 where
@@ -18,6 +22,9 @@ where
     markdown_splitter: Arc<dyn TextSplitter>,
     job_repository: Arc<dyn JobRepository>,
     sparse_embedder: Option<Arc<dyn SparseEmbedder>>,
+    eval_event_repository: Option<Arc<dyn EvalEventRepository>>,
+    eval_outbox_repository: Option<Arc<dyn EvalOutboxRepository>>,
+    model_config: String,
 }
 
 impl<F, V> IngestionService<F, V>
@@ -42,7 +49,22 @@ where
             markdown_splitter,
             job_repository,
             sparse_embedder,
+            eval_event_repository: None,
+            eval_outbox_repository: None,
+            model_config: String::new(),
         }
+    }
+
+    pub fn with_eval(
+        mut self,
+        eval_event_repository: Arc<dyn EvalEventRepository>,
+        eval_outbox_repository: Arc<dyn EvalOutboxRepository>,
+        model_config: &str,
+    ) -> Self {
+        self.eval_event_repository = Some(eval_event_repository);
+        self.eval_outbox_repository = Some(eval_outbox_repository);
+        self.model_config = model_config.to_string();
+        self
     }
 
     pub async fn ingest(
@@ -51,6 +73,7 @@ where
         filename: String,
         content_type: ContentType,
     ) -> Result<DocumentId, IngestionError> {
+        let eval_filename = filename.clone();
         let document = Document::new(filename, content_type, data.len() as u64);
         let doc_id = document.id;
 
@@ -134,6 +157,10 @@ where
                     .update_status(job_id, JobStatus::Completed, None)
                     .await
                     .map_err(IngestionError::Repository)?;
+                // Chunk count is unknown at this point (we only returned doc_id), so derive
+                // from the fact that we succeeded: fire a best-effort eval event with count=1
+                // to indicate a non-empty ingestion. The IngestionWorker path has the real count.
+                self.fire_and_forget_eval(content_type, &eval_filename, 1);
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -145,6 +172,32 @@ where
         }
 
         result
+    }
+
+    fn fire_and_forget_eval(&self, content_type: ContentType, filename: &str, chunk_count: usize) {
+        if let (Some(event_repo), Some(outbox_repo)) =
+            (&self.eval_event_repository, &self.eval_outbox_repository)
+        {
+            let op_type = match content_type {
+                ContentType::Audio | ContentType::Video => EvalOperationType::IngestionMp4,
+                ContentType::Pdf => EvalOperationType::IngestionPdf,
+                ContentType::Text => EvalOperationType::Query,
+            };
+            let event =
+                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config, None);
+            let event_repo = Arc::clone(event_repo);
+            let outbox_repo = Arc::clone(outbox_repo);
+            tokio::spawn(async move {
+                match event_repo.record(&event).await {
+                    Ok(_) => {
+                        if let Err(e) = outbox_repo.enqueue(event.id).await {
+                            tracing::warn!(error = %e, "Failed to enqueue ingestion eval outbox");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to record ingestion eval event"),
+                }
+            });
+        }
     }
 }
 

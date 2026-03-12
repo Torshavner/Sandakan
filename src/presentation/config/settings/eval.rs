@@ -6,8 +6,6 @@ pub struct EvalSettings {
     pub enabled: bool,
     #[serde(default = "default_faithfulness_threshold")]
     pub faithfulness_threshold: f32,
-    #[serde(default = "default_correctness_threshold")]
-    pub correctness_threshold: f32,
     #[serde(default = "default_poll_interval")]
     pub worker_poll_interval_secs: u64,
     #[serde(default = "default_batch_size")]
@@ -15,10 +13,6 @@ pub struct EvalSettings {
 }
 
 fn default_faithfulness_threshold() -> f32 {
-    0.7
-}
-
-fn default_correctness_threshold() -> f32 {
     0.7
 }
 
@@ -35,7 +29,6 @@ impl Default for EvalSettings {
         Self {
             enabled: false,
             faithfulness_threshold: default_faithfulness_threshold(),
-            correctness_threshold: default_correctness_threshold(),
             worker_poll_interval_secs: default_poll_interval(),
             worker_batch_size: default_batch_size(),
         }

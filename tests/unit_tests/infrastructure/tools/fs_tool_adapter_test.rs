@@ -145,8 +145,7 @@ async fn given_binary_file_when_reading_then_returns_binary_file_error() {
     let binary_data: Vec<u8> = vec![0x00, 0xFF, 0xFE, 0x80, 0x81, 0x82];
     std::fs::write(dir.path().join("data.bin"), &binary_data).unwrap();
 
-    let (_, read_tool, _, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool.execute(&json!({ "path": "data.bin" })).await;
 
@@ -160,8 +159,7 @@ async fn given_start_and_end_line_when_reading_file_then_returns_only_selected_l
     let dir = tempfile::tempdir().unwrap();
     let content = "line1\nline2\nline3\nline4\nline5";
     std::fs::write(dir.path().join("lines.txt"), content.as_bytes()).unwrap();
-    let (_, read_tool, _, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "lines.txt", "start_line": 2, "end_line": 4 }))
@@ -179,8 +177,7 @@ async fn given_start_and_end_line_when_reading_file_then_returns_only_selected_l
 async fn given_only_start_line_when_reading_file_then_returns_from_start_to_end_of_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("f.txt"), b"a\nb\nc\nd").unwrap();
-    let (_, read_tool, _, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "f.txt", "start_line": 3 }))
@@ -198,8 +195,7 @@ async fn given_start_line_beyond_file_length_when_reading_then_returns_execution
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("short.txt"), b"only one line").unwrap();
-    let (_, read_tool, _, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool
         .execute(&json!({ "path": "short.txt", "start_line": 99 }))
@@ -215,8 +211,7 @@ async fn given_context_lines_when_searching_files_then_returns_surrounding_lines
     let dir = tempfile::tempdir().unwrap();
     let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
     std::fs::write(dir.path().join("ctx.txt"), content.as_bytes()).unwrap();
-    let (_, _, search_tool, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "gamma", "context_lines": 1 }))
@@ -232,8 +227,7 @@ async fn given_context_lines_when_searching_files_then_returns_surrounding_lines
 async fn given_no_context_lines_when_searching_files_then_returns_only_matching_lines() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("exact.txt"), b"foo\nbar\nbaz").unwrap();
-    let (_, _, search_tool, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "bar" }))
@@ -322,8 +316,7 @@ async fn given_path_traversal_attempt_when_reading_file_then_returns_execution_f
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (_, read_tool, _, _) =
-        build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, read_tool, _, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = read_tool.execute(&json!({ "path": "../secret.txt" })).await;
 
@@ -346,8 +339,7 @@ async fn given_path_traversal_attempt_when_listing_directory_then_returns_execut
         .tempdir_in(parent.path())
         .unwrap();
 
-    let (list_tool, _, _, _) =
-        build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (list_tool, _, _, _) = build_fs_tools(child.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = list_tool.execute(&json!({ "path": ".." })).await;
 
@@ -479,8 +471,7 @@ async fn given_gitignore_excludes_file_when_searching_then_excluded_file_not_in_
     std::fs::write(dir.path().join("included.txt"), b"find_me here").unwrap();
     std::fs::write(dir.path().join("excluded.txt"), b"find_me here").unwrap();
     std::fs::write(dir.path().join(".gitignore"), b"excluded.txt\n").unwrap();
-    let (_, _, search_tool, _) =
-        build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
+    let (_, _, search_tool, _) = build_fs_tools(dir.path().to_str().unwrap(), 32_768, 200).unwrap();
 
     let result = search_tool
         .execute(&json!({ "pattern": "find_me" }))

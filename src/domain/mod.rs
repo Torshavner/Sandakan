@@ -25,7 +25,9 @@ pub use document::{ContentType, Document};
 pub use document_metadata::DocumentMetadata;
 pub use embedding::{Embedding, SparseEmbedding};
 pub use eval_entry::EvalEntry;
-pub use eval_event::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
+pub use eval_event::{
+    AgenticTrace, EvalEvent, EvalEventId, EvalOperationType, EvalSource, ToolCallTrace,
+};
 pub use eval_outbox::{EvalOutboxEntry, EvalOutboxStatus};
 pub use eval_result::{EvalResult, EvalResultId};
 pub use job::Job;

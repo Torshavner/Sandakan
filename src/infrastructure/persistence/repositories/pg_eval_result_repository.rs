@@ -25,14 +25,16 @@ impl EvalResultRepository for PgEvalResultRepository {
         sqlx::query!(
             r#"
             INSERT INTO eval_results
-                (id, eval_event_id, faithfulness, context_recall, correctness,
-                 below_threshold, computed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (id, eval_event_id, faithfulness, answer_relevancy, context_precision,
+                 context_recall, correctness, below_threshold, computed_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (eval_event_id) DO NOTHING
             "#,
             id,
             eval_event_id,
             result.faithfulness,
+            result.answer_relevancy,
+            result.context_precision,
             result.context_recall,
             result.correctness,
             result.below_threshold,

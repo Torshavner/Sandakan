@@ -1,0 +1,3 @@
+ALTER TABLE eval_results
+    ADD COLUMN IF NOT EXISTS answer_relevancy REAL DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS context_precision REAL DEFAULT NULL;

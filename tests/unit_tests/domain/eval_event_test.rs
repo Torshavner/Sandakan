@@ -103,6 +103,7 @@ fn given_new_agentic_constructor_when_creating_eval_event_then_operation_type_is
         sources,
         "test/model",
         None,
+        None,
     );
     assert_eq!(event.operation_type, EvalOperationType::AgenticRun);
     assert_eq!(event.question, "Agent question?");

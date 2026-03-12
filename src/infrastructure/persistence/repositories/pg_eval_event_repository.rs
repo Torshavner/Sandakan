@@ -5,7 +5,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::application::ports::{EvalEventError, EvalEventRepository};
-use crate::domain::{EvalEvent, EvalEventId, EvalOperationType, EvalSource};
+use crate::domain::{AgenticTrace, EvalEvent, EvalEventId, EvalOperationType, EvalSource};
 
 pub struct PgEvalEventRepository {
     pool: PgPool,
@@ -26,6 +26,7 @@ struct EvalEventRow {
     model_config: String,
     operation_type: String,
     correlation_id: Option<String>,
+    agentic_trace: Option<serde_json::Value>,
 }
 
 fn parse_operation_type(s: &str) -> EvalOperationType {
@@ -41,6 +42,11 @@ fn parse_operation_type(s: &str) -> EvalOperationType {
 fn row_to_event(r: EvalEventRow) -> Result<EvalEvent, EvalEventError> {
     let sources: Vec<EvalSource> = serde_json::from_value(r.retrieved_sources)
         .map_err(|e| EvalEventError::Serialization(e.to_string()))?;
+    let agentic_trace: Option<AgenticTrace> = r
+        .agentic_trace
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e: serde_json::Error| EvalEventError::Serialization(e.to_string()))?;
     Ok(EvalEvent {
         id: EvalEventId::from_uuid(r.id),
         timestamp: r.timestamp,
@@ -50,6 +56,7 @@ fn row_to_event(r: EvalEventRow) -> Result<EvalEvent, EvalEventError> {
         model_config: r.model_config,
         operation_type: parse_operation_type(&r.operation_type),
         correlation_id: r.correlation_id,
+        agentic_trace,
     })
 }
 
@@ -60,11 +67,17 @@ impl EvalEventRepository for PgEvalEventRepository {
         let id = event.id.as_uuid();
         let sources = serde_json::to_value(&event.retrieved_sources)
             .map_err(|e| EvalEventError::Serialization(e.to_string()))?;
+        let agentic_trace = event
+            .agentic_trace
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| EvalEventError::Serialization(e.to_string()))?;
 
         sqlx::query!(
             r#"
-            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO eval_events (id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id, agentic_trace)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (id) DO NOTHING
             "#,
             id,
@@ -74,7 +87,8 @@ impl EvalEventRepository for PgEvalEventRepository {
             sources,
             event.model_config,
             event.operation_type.as_str(),
-            event.correlation_id.as_deref()
+            event.correlation_id.as_deref(),
+            agentic_trace
         )
         .execute(&self.pool)
         .await
@@ -89,7 +103,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let row = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id, agentic_trace
             FROM eval_events
             WHERE id = $1
             "#,
@@ -107,7 +121,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id, agentic_trace
             FROM eval_events
             ORDER BY timestamp DESC
             "#
@@ -129,7 +143,7 @@ impl EvalEventRepository for PgEvalEventRepository {
         let rows = sqlx::query_as!(
             EvalEventRow,
             r#"
-            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id
+            SELECT id, timestamp, question, generated_answer, retrieved_sources, model_config, operation_type, correlation_id, agentic_trace
             FROM eval_events
             ORDER BY RANDOM()
             LIMIT $1

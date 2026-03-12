@@ -247,4 +247,3 @@ impl ToolHandler for GetFunctionSignaturesTool {
         self.0.get_function_signatures(arguments).await
     }
 }
-

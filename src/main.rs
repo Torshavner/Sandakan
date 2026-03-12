@@ -136,7 +136,6 @@ async fn main() -> anyhow::Result<()> {
         ingestion_worker,
         eval_event_repo,
         eval_outbox_repo,
-        &embedder,
         &llm_client,
         &model_config,
         &pg_pool,
@@ -430,13 +429,11 @@ fn build_eval_repos(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_workers(
     settings: &Settings,
     ingestion_worker: IngestionWorker<CompositeFileLoader, QdrantAdapter>,
     eval_event_repo: Option<Arc<dyn EvalEventRepository>>,
     eval_outbox_repo: Option<Arc<dyn EvalOutboxRepository>>,
-    embedder: &Arc<dyn Embedder>,
     llm_client: &Arc<StreamingLlmClient>,
     model_config: &str,
     pg_pool: &PgPool,
@@ -450,10 +447,8 @@ fn spawn_workers(
                 outbox_repo.clone(),
                 event_repo.clone(),
                 result_repo,
-                Arc::clone(embedder),
                 llm_client.clone() as Arc<dyn LlmClient>,
                 settings.eval.faithfulness_threshold,
-                settings.eval.correctness_threshold,
                 std::time::Duration::from_secs(settings.eval.worker_poll_interval_secs),
                 settings.eval.worker_batch_size,
             );

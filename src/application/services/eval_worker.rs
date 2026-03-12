@@ -1,10 +1,11 @@
+// @AI-BYPASS-LENGTH
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::Instrument;
 
 use crate::application::ports::{
-    Embedder, EvalEventRepository, EvalOutboxRepository, EvalResultRepository, LlmClient,
+    EvalEventRepository, EvalOutboxRepository, EvalResultRepository, LlmClient,
 };
 use crate::application::services::eval_metrics;
 use crate::domain::{EvalOperationType, EvalOutboxEntry, EvalResult};
@@ -13,24 +14,19 @@ pub struct EvalWorker {
     outbox_repository: Arc<dyn EvalOutboxRepository>,
     event_repository: Arc<dyn EvalEventRepository>,
     result_repository: Arc<dyn EvalResultRepository>,
-    _embedder: Arc<dyn Embedder>,
     judge: Arc<dyn LlmClient>,
     faithfulness_threshold: f32,
-    _correctness_threshold: f32,
     poll_interval: Duration,
     batch_size: usize,
 }
 
 impl EvalWorker {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         outbox_repository: Arc<dyn EvalOutboxRepository>,
         event_repository: Arc<dyn EvalEventRepository>,
         result_repository: Arc<dyn EvalResultRepository>,
-        embedder: Arc<dyn Embedder>,
         judge: Arc<dyn LlmClient>,
         faithfulness_threshold: f32,
-        correctness_threshold: f32,
         poll_interval: Duration,
         batch_size: usize,
     ) -> Self {
@@ -38,17 +34,13 @@ impl EvalWorker {
             outbox_repository,
             event_repository,
             result_repository,
-            _embedder: embedder,
             judge,
             faithfulness_threshold,
-            _correctness_threshold: correctness_threshold,
             poll_interval,
             batch_size,
         }
     }
 
-    /// Actor loop — transport concern (interval + claim_pending).
-    /// Post-US-017: becomes `while let Some(entry) = subscriber.receive().await`
     pub async fn run(self) {
         tracing::info!("EvalWorker started");
         let mut interval = tokio::time::interval(self.poll_interval);
@@ -65,8 +57,6 @@ impl EvalWorker {
         }
     }
 
-    /// Transport concern — wraps outbox polling.
-    /// Post-US-017: extracted into OutboxSubscriber<EvalOutboxEntry>::receive()
     async fn receive_batch(&self) -> Result<Vec<EvalOutboxEntry>, EvalWorkerError> {
         self.outbox_repository
             .claim_pending(self.batch_size)
@@ -74,8 +64,6 @@ impl EvalWorker {
             .map_err(|e| EvalWorkerError::Outbox(e.to_string()))
     }
 
-    /// Pure business logic — evaluates one entry, persists result, emits metrics, marks done/failed.
-    /// This method is stable across the US-017 migration.
     async fn process_entry(&self, entry: EvalOutboxEntry) {
         let span = tracing::info_span!(
             "eval_process",
@@ -112,22 +100,20 @@ impl EvalWorker {
                 ))
             })?;
 
-        // Record correlation_id onto the active span (set by .instrument() in process_entry).
         if let Some(cid) = &event.correlation_id {
             tracing::Span::current().record("correlation_id", cid.as_str());
         }
 
         match event.operation_type {
-            EvalOperationType::Query | EvalOperationType::AgenticRun => {
-                self.score_llm_based(entry, &event).await
-            }
+            EvalOperationType::Query => self.score_rag_query(entry, &event).await,
+            EvalOperationType::AgenticRun => self.score_agentic_run(entry, &event).await,
             EvalOperationType::IngestionPdf | EvalOperationType::IngestionMp4 => {
                 self.score_ingestion(entry, &event).await
             }
         }
     }
 
-    async fn score_llm_based(
+    async fn score_rag_query(
         &self,
         entry: &EvalOutboxEntry,
         event: &crate::domain::EvalEvent,
@@ -142,10 +128,27 @@ impl EvalWorker {
         .await
         .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
 
-        // context_recall and correctness require ground-truth; not available in the online worker path.
+        let answer_relevancy = eval_metrics::compute_answer_relevancy(
+            self.judge.as_ref(),
+            &event.question,
+            &event.generated_answer,
+        )
+        .await
+        .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
+        let context_precision = eval_metrics::compute_context_precision(
+            self.judge.as_ref(),
+            &event.question,
+            &event.retrieved_sources,
+        )
+        .await
+        .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
         let result = EvalResult::new(
             entry.eval_event_id,
             faithfulness,
+            Some(answer_relevancy),
+            Some(context_precision),
             None,
             None,
             self.faithfulness_threshold,
@@ -159,8 +162,111 @@ impl EvalWorker {
         tracing::info!(
             eval_event_id = %entry.eval_event_id,
             operation_type = event.operation_type.as_str(),
-            faithfulness = faithfulness,
+            faithfulness,
+            answer_relevancy,
+            context_precision,
             below_threshold = result.below_threshold,
+            model_config = %event.model_config,
+            "eval.result"
+        );
+
+        self.outbox_repository
+            .mark_done(entry.id)
+            .await
+            .map_err(|e| EvalWorkerError::Outbox(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn score_agentic_run(
+        &self,
+        entry: &EvalOutboxEntry,
+        event: &crate::domain::EvalEvent,
+    ) -> Result<(), EvalWorkerError> {
+        let used_tool_calls = event
+            .agentic_trace
+            .as_ref()
+            .map(|t| !t.tool_calls.is_empty())
+            .unwrap_or(false);
+
+        let (faithfulness, context_precision) = match &event.agentic_trace {
+            Some(trace) if !trace.tool_calls.is_empty() => {
+                let f = eval_metrics::compute_agentic_faithfulness(
+                    self.judge.as_ref(),
+                    &event.generated_answer,
+                    &trace.tool_calls,
+                )
+                .await
+                .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
+                let cp = eval_metrics::compute_context_precision(
+                    self.judge.as_ref(),
+                    &event.question,
+                    &event.retrieved_sources,
+                )
+                .await
+                .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
+                (f, Some(cp))
+            }
+            _ => {
+                // Zero-tool-call path (empty trace OR no trace at all): grade faithfulness
+                // against flat context; context_precision is None — no retrieval happened.
+                tracing::debug!(
+                    eval_event_id = %entry.eval_event_id,
+                    has_trace = event.agentic_trace.is_some(),
+                    "score_agentic_run: no tool calls — flat context faithfulness, context_precision skipped"
+                );
+                let context = event.context_text();
+                let f = eval_metrics::compute_faithfulness(
+                    self.judge.as_ref(),
+                    &event.generated_answer,
+                    &context,
+                )
+                .await
+                .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
+                (f, None)
+            }
+        };
+
+        let answer_relevancy = eval_metrics::compute_answer_relevancy(
+            self.judge.as_ref(),
+            &event.question,
+            &event.generated_answer,
+        )
+        .await
+        .map_err(|e| EvalWorkerError::Judge(e.to_string()))?;
+
+        let result = EvalResult::new(
+            entry.eval_event_id,
+            faithfulness,
+            Some(answer_relevancy),
+            context_precision,
+            None,
+            None,
+            self.faithfulness_threshold,
+        );
+
+        self.result_repository
+            .save(&result)
+            .await
+            .map_err(|e| EvalWorkerError::ResultRepository(e.to_string()))?;
+
+        let reflection_score = event
+            .agentic_trace
+            .as_ref()
+            .and_then(|t| t.reflection_score);
+
+        tracing::info!(
+            eval_event_id = %entry.eval_event_id,
+            operation_type = event.operation_type.as_str(),
+            faithfulness,
+            answer_relevancy,
+            context_precision = ?context_precision,
+            below_threshold = result.below_threshold,
+            reflection_score = ?reflection_score,
+            used_tool_calls,
             model_config = %event.model_config,
             "eval.result"
         );
@@ -186,6 +292,8 @@ impl EvalWorker {
             faithfulness,
             None,
             None,
+            None,
+            None,
             self.faithfulness_threshold,
         );
 
@@ -197,7 +305,7 @@ impl EvalWorker {
         tracing::info!(
             eval_event_id = %entry.eval_event_id,
             operation_type = event.operation_type.as_str(),
-            chunk_count = chunk_count,
+            chunk_count,
             non_empty = chunk_count > 0,
             "eval.result"
         );
@@ -210,7 +318,6 @@ impl EvalWorker {
         Ok(())
     }
 
-    /// Process a single batch — useful for testing without the interval loop.
     pub async fn process_batch(&self) -> Result<usize, EvalWorkerError> {
         let entries = self.receive_batch().await?;
         let count = entries.len();

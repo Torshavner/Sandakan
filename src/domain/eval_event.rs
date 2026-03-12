@@ -59,6 +59,30 @@ pub struct EvalSource {
     pub score: f32,
 }
 
+/// Single tool invocation captured during a ReAct iteration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallTrace {
+    pub tool_name: String,
+    /// Raw JSON arguments string as sent to the tool.
+    pub arguments: String,
+    /// First 2000 chars of the tool result content.
+    pub result_preview: String,
+    pub success: bool,
+}
+
+/// Full agentic run trace attached to an [`EvalEvent`] for richer judge evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgenticTrace {
+    /// Number of ReAct iterations completed.
+    pub iterations: usize,
+    pub tool_calls: Vec<ToolCallTrace>,
+    /// Critic score from the reflection pass, if reflection was enabled.
+    pub reflection_score: Option<f32>,
+    /// Issues reported by the critic, if any.
+    #[serde(default)]
+    pub reflection_issues: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalEvent {
     pub id: EvalEventId,
@@ -72,6 +96,9 @@ pub struct EvalEvent {
     /// its scoring span back to the request trace in Tempo/Grafana.
     #[serde(default)]
     pub correlation_id: Option<String>,
+    /// Full trace of tool calls and reflection, populated for `AgenticRun` events.
+    #[serde(default)]
+    pub agentic_trace: Option<AgenticTrace>,
 }
 
 impl EvalEvent {
@@ -92,6 +119,7 @@ impl EvalEvent {
             model_config: model_config.to_string(),
             operation_type: EvalOperationType::Query,
             correlation_id,
+            agentic_trace: None,
         }
     }
 
@@ -102,9 +130,11 @@ impl EvalEvent {
         retrieved_sources: Vec<EvalSource>,
         model_config: &str,
         correlation_id: Option<String>,
+        agentic_trace: Option<AgenticTrace>,
     ) -> Self {
         Self {
             operation_type: EvalOperationType::AgenticRun,
+            agentic_trace,
             ..Self::new(
                 question,
                 generated_answer,
@@ -135,6 +165,7 @@ impl EvalEvent {
             model_config: model_config.to_string(),
             operation_type,
             correlation_id,
+            agentic_trace: None,
         }
     }
 

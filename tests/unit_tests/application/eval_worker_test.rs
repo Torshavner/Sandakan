@@ -5,31 +5,16 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use sandakan::application::ports::{
-    AgentMessage, Embedder, EmbedderError, EvalEventError, EvalEventRepository, EvalOutboxError,
-    EvalOutboxRepository, EvalResultError, EvalResultRepository, LlmClient, LlmClientError,
-    LlmToolResponse, ToolSchema,
+    AgentMessage, EvalEventError, EvalEventRepository, EvalOutboxError, EvalOutboxRepository,
+    EvalResultError, EvalResultRepository, LlmClient, LlmClientError, LlmToolResponse, ToolSchema,
 };
 use sandakan::application::services::EvalWorker;
 use sandakan::domain::{
-    Embedding, EvalEvent, EvalEventId, EvalOperationType, EvalOutboxEntry, EvalResult, EvalSource,
+    AgenticTrace, EvalEvent, EvalEventId, EvalOperationType, EvalOutboxEntry, EvalResult,
+    EvalSource, ToolCallTrace,
 };
 
 // --- Hand-written mocks ---
-
-struct StubEmbedder;
-
-#[async_trait::async_trait]
-impl Embedder for StubEmbedder {
-    async fn embed(&self, _text: &str) -> Result<Embedding, EmbedderError> {
-        Ok(Embedding::new(vec![0.1; 384]))
-    }
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedderError> {
-        Ok(texts
-            .iter()
-            .map(|_| Embedding::new(vec![0.1; 384]))
-            .collect())
-    }
-}
 
 /// Judge that returns a valid faithfulness score.
 struct HighFaithfulnessJudge;
@@ -135,6 +120,7 @@ fn sample_eval_event(id: EvalEventId) -> EvalEvent {
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::Query,
         correlation_id: None,
+        agentic_trace: None,
     }
 }
 
@@ -148,6 +134,7 @@ fn ingestion_eval_event(id: EvalEventId, chunk_count: usize) -> EvalEvent {
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::IngestionPdf,
         correlation_id: None,
+        agentic_trace: None,
     }
 }
 
@@ -165,6 +152,7 @@ fn agentic_eval_event(id: EvalEventId) -> EvalEvent {
         model_config: "test/model".to_string(),
         operation_type: EvalOperationType::AgenticRun,
         correlation_id: None,
+        agentic_trace: None,
     }
 }
 
@@ -345,9 +333,7 @@ async fn given_pending_outbox_entry_when_worker_processes_then_marks_done() {
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         Arc::new(NoopResultRepository) as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -373,9 +359,7 @@ async fn given_judge_returns_invalid_score_when_worker_processes_then_marks_fail
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         Arc::new(NoopResultRepository) as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -397,9 +381,7 @@ async fn given_no_pending_entries_when_worker_polls_then_no_operations_performed
         outbox as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         Arc::new(NoopResultRepository) as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -422,9 +404,7 @@ async fn given_missing_eval_event_when_worker_processes_then_marks_failed() {
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         Arc::new(NoopResultRepository) as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -451,9 +431,7 @@ async fn given_successful_scoring_when_worker_processes_entry_then_result_is_sav
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         result_repo.clone() as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -480,9 +458,7 @@ async fn given_result_repository_fails_when_worker_processes_entry_then_outbox_i
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         Arc::new(FailingResultRepository) as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -510,9 +486,7 @@ async fn given_agentic_run_eval_event_when_worker_processes_then_llm_judge_calle
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         result_repo.clone() as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -543,9 +517,7 @@ async fn given_ingestion_pdf_eval_event_when_worker_processes_then_llm_client_no
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         result_repo.clone() as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -574,9 +546,7 @@ async fn given_ingestion_pdf_with_zero_chunks_when_worker_processes_then_result_
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         result_repo.clone() as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -606,9 +576,7 @@ async fn given_query_eval_event_when_worker_processes_then_emits_query_operation
         outbox.clone() as Arc<dyn EvalOutboxRepository>,
         event_repo as Arc<dyn EvalEventRepository>,
         result_repo.clone() as Arc<dyn EvalResultRepository>,
-        Arc::new(StubEmbedder) as Arc<dyn Embedder>,
         Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
-        0.7,
         0.7,
         Duration::from_secs(60),
         10,
@@ -619,4 +587,154 @@ async fn given_query_eval_event_when_worker_processes_then_emits_query_operation
     assert_eq!(processed, 1);
     assert_eq!(outbox.done_count().await, 1);
     assert_eq!(result_repo.save_count().await, 1);
+}
+
+fn agentic_eval_event_with_trace(id: EvalEventId) -> EvalEvent {
+    EvalEvent {
+        id,
+        timestamp: chrono::Utc::now(),
+        question: "What does the search tool return for AI?".to_string(),
+        generated_answer: "The search tool found several articles about AI.".to_string(),
+        retrieved_sources: vec![EvalSource {
+            text: "AI is a broad field.".to_string(),
+            page: None,
+            score: 0.9,
+        }],
+        model_config: "test/model".to_string(),
+        operation_type: EvalOperationType::AgenticRun,
+        correlation_id: None,
+        agentic_trace: Some(AgenticTrace {
+            iterations: 1,
+            tool_calls: vec![ToolCallTrace {
+                tool_name: "search".to_string(),
+                arguments: r#"{"query":"AI"}"#.to_string(),
+                result_preview: "The search tool found several articles about AI.".to_string(),
+                success: true,
+            }],
+            reflection_score: Some(0.88),
+            reflection_issues: vec![],
+        }),
+    }
+}
+
+fn agentic_eval_event_with_empty_trace(id: EvalEventId) -> EvalEvent {
+    EvalEvent {
+        id,
+        timestamp: chrono::Utc::now(),
+        question: "Generate three follow-up questions based on our chat history.".to_string(),
+        generated_answer: "1. What is chunking?\n2. How does RRF work?\n3. What are dense vectors?"
+            .to_string(),
+        retrieved_sources: vec![],
+        model_config: "test/model".to_string(),
+        operation_type: EvalOperationType::AgenticRun,
+        correlation_id: None,
+        agentic_trace: Some(AgenticTrace {
+            iterations: 1,
+            tool_calls: vec![],
+            reflection_score: None,
+            reflection_issues: vec![],
+        }),
+    }
+}
+
+#[tokio::test]
+async fn given_agentic_run_with_tool_trace_when_worker_processes_then_result_persisted_via_trace_path()
+ {
+    let event_id = EvalEventId::new();
+    let event = agentic_eval_event_with_trace(event_id);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
+    assert!(saved[0].answer_relevancy.is_some());
+    assert!(saved[0].context_precision.is_some());
+}
+
+#[tokio::test]
+async fn given_agentic_run_without_trace_when_worker_processes_then_fallback_flat_context_path_used()
+ {
+    let event_id = EvalEventId::new();
+    let event = agentic_eval_event(event_id);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
+}
+
+#[tokio::test]
+async fn given_agentic_run_with_empty_tool_calls_when_worker_processes_then_context_precision_is_none()
+{
+    let event_id = EvalEventId::new();
+    let event = agentic_eval_event_with_empty_trace(event_id);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    // Faithfulness graded against flat context via the zero-tool-call path.
+    assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
+    // answer_relevancy is always computed.
+    assert!(saved[0].answer_relevancy.is_some());
+    // context_precision must be None — no retrieval happened.
+    assert!(saved[0].context_precision.is_none());
+    // below_threshold is false because faithfulness (0.95) > threshold (0.7).
+    assert!(!saved[0].below_threshold);
 }

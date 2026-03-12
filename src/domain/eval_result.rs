@@ -35,17 +35,18 @@ impl std::fmt::Display for EvalResultId {
 
 /// Persisted outcome of one LLM-as-judge evaluation run for a single `EvalEvent`.
 ///
-/// `context_recall` and `correctness` are `None` when the worker processed the entry
-/// without ground-truth (the typical online path). The offline `evaluate` CLI can
-/// populate them when a ground-truth JSONL file is supplied.
+/// `context_recall` and `correctness` are `None` when no ground-truth is available.
+/// `answer_relevancy` and `context_precision` are populated on the online path for
+/// Query and AgenticRun events; `None` for ingestion events.
 ///
-/// `below_threshold` is pre-computed at save time so Grafana dashboards can filter
-/// with `WHERE below_threshold = true` without needing to know the configured threshold.
+/// `below_threshold` is pre-computed at save time so dashboards can filter cheaply.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalResult {
     pub id: EvalResultId,
     pub eval_event_id: EvalEventId,
     pub faithfulness: f32,
+    pub answer_relevancy: Option<f32>,
+    pub context_precision: Option<f32>,
     pub context_recall: Option<f32>,
     pub correctness: Option<f32>,
     pub below_threshold: bool,
@@ -56,6 +57,8 @@ impl EvalResult {
     pub fn new(
         eval_event_id: EvalEventId,
         faithfulness: f32,
+        answer_relevancy: Option<f32>,
+        context_precision: Option<f32>,
         context_recall: Option<f32>,
         correctness: Option<f32>,
         faithfulness_threshold: f32,
@@ -64,6 +67,8 @@ impl EvalResult {
             id: EvalResultId::new(),
             eval_event_id,
             faithfulness,
+            answer_relevancy,
+            context_precision,
             context_recall,
             correctness,
             below_threshold: faithfulness < faithfulness_threshold,
