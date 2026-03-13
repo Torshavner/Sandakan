@@ -76,16 +76,7 @@ services:
     environment:
       - PORT=8080
       - WEBUI_AUTH=False
-      # Vector DB Configuration
-      - VECTOR_DB=qdrant
-      - QDRANT_URI=http://qdrant:6333
-      # RAG Configuration
-      - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-}
-      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-}
-      # LLM Configuration (configure based on your setup)
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-placeholder}
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://host.docker.internal:8080/v1}
+      - ENABLE_AUTOCOMPLETE_GENERATION=false
     volumes:
       - open_webui_data:/app/backend/data
     healthcheck:

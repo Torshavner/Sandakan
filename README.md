@@ -187,27 +187,27 @@ With Azure, `libpdfium` and local Candle Whisper inference are not required. Set
 
 ```bash
 # LLM
-APP_LLM_PROVIDER=azure
-APP_LLM_AZURE_ENDPOINT=https://<your-resource>.openai.azure.com/
-APP_LLM_API_KEY=<key>
-APP_LLM_CHAT_MODEL=<deployment-name>            # e.g. gpt-4o
+APP_LLM__PROVIDER=azure
+APP_LLM__AZURE_ENDPOINT=https://<your-resource>.openai.azure.com/
+APP_LLM__API_KEY=<key>
+APP_LLM__CHAT_MODEL=<deployment-name>            # e.g. gpt-4o
 
 # Embeddings
-APP_EMBEDDINGS_PROVIDER=openai
-APP_EMBEDDINGS_API_KEY=<key>
-APP_EMBEDDINGS_BASE_URL=https://<your-resource>.openai.azure.com/
-APP_EMBEDDINGS_MODEL=text-embedding-3-small
+APP_EMBEDDINGS__PROVIDER=openai
+APP_EMBEDDINGS__API_KEY=<key>
+APP_EMBEDDINGS__BASE_URL=https://<your-resource>.openai.azure.com/
+APP_EMBEDDINGS__MODEL=text-embedding-3-small
 
 # PDF extraction via Azure Document Intelligence (no libpdfium needed)
-APP_EXTRACTION_PDF_PROVIDER=azure_doc_intel
-APP_EXTRACTION_PDF_AZURE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
-APP_EXTRACTION_PDF_AZURE_KEY=<key>
+APP_EXTRACTION__PDF__PROVIDER=azure_doc_intel
+APP_EXTRACTION__PDF__AZURE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
+APP_EXTRACTION__PDF__AZURE_KEY=<key>
 
 # Audio transcription via Azure Whisper (no Candle inference needed)
-APP_EXTRACTION_AUDIO_PROVIDER=azure
-APP_EXTRACTION_AUDIO_AZURE_ENDPOINT=https://<your-resource>.openai.azure.com/
-APP_EXTRACTION_AUDIO_AZURE_KEY=<key>
-APP_EXTRACTION_AUDIO_AZURE_MODEL=whisper
+APP_EXTRACTION__AUDIO__PROVIDER=azure
+APP_EXTRACTION__AUDIO__AZURE_ENDPOINT=https://<your-resource>.openai.azure.com/
+APP_EXTRACTION__AUDIO__AZURE_KEY=<key>
+APP_EXTRACTION__AUDIO__AZURE_MODEL=whisper
 ```
 
 `ffmpeg` is still required on the host for MP4 ingestion — audio extraction from video happens locally before the transcription call.
