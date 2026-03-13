@@ -323,13 +323,79 @@ impl EvalWorker {
         event: &crate::domain::EvalEvent,
     ) -> Result<(), EvalWorkerError> {
         let chunk_count: usize = event.generated_answer.parse().unwrap_or(0);
-        let faithfulness = if chunk_count > 0 { 1.0_f32 } else { 0.0_f32 };
 
-        let eval_description = format!(
-            "{}: {} chunk(s) ingested.",
-            event.operation_type.as_str(),
-            chunk_count
-        );
+        // Zero chunks means total failure — no LLM call needed.
+        if chunk_count == 0 {
+            let eval_description = format!(
+                "{}: 0 chunks ingested — ingestion produced no output.",
+                event.operation_type.as_str(),
+            );
+            let result = EvalResult::new(
+                entry.eval_event_id,
+                event.question.clone(),
+                event.generated_answer.clone(),
+                eval_description,
+                0.0,
+                None,
+                None,
+                None,
+                None,
+                self.faithfulness_threshold,
+            );
+            self.result_repository
+                .save(&result)
+                .await
+                .map_err(|e| EvalWorkerError::ResultRepository(e.to_string()))?;
+            tracing::info!(
+                eval_event_id = %entry.eval_event_id,
+                operation_type = event.operation_type.as_str(),
+                chunk_count = 0,
+                faithfulness = 0.0,
+                "eval.result"
+            );
+            self.outbox_repository
+                .mark_done(entry.id)
+                .await
+                .map_err(|e| EvalWorkerError::Outbox(e.to_string()))?;
+            return Ok(());
+        }
+
+        // When chunk samples are present, use LLM judge for quality scoring.
+        // Legacy events (empty retrieved_sources) keep backward-compatible trivial score.
+        let has_samples = !event.retrieved_sources.is_empty();
+        let faithfulness = if has_samples {
+            eval_metrics::compute_chunk_quality(
+                self.judge.as_ref(),
+                &event.question,
+                event.operation_type.as_str(),
+                &event.retrieved_sources,
+            )
+            .await
+            .map_err(|e| EvalWorkerError::Judge(e.to_string()))?
+        } else {
+            1.0
+        };
+
+        let eval_description = if has_samples {
+            eval_metrics::generate_eval_description(
+                self.judge.as_ref(),
+                event.operation_type.as_str(),
+                &event.question,
+                &event.generated_answer,
+                faithfulness,
+                None,
+                None,
+                0,
+            )
+            .await
+            .map_err(|e| EvalWorkerError::Judge(e.to_string()))?
+        } else {
+            format!(
+                "{}: {} chunk(s) ingested.",
+                event.operation_type.as_str(),
+                chunk_count
+            )
+        };
 
         let result = EvalResult::new(
             entry.eval_event_id,
@@ -353,7 +419,9 @@ impl EvalWorker {
             eval_event_id = %entry.eval_event_id,
             operation_type = event.operation_type.as_str(),
             chunk_count,
-            non_empty = chunk_count > 0,
+            faithfulness,
+            has_samples,
+            below_threshold = result.below_threshold,
             "eval.result"
         );
 

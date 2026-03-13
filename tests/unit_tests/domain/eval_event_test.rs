@@ -119,6 +119,7 @@ fn given_new_ingestion_pdf_constructor_when_creating_eval_event_then_operation_t
         42,
         "test/model",
         None,
+        vec![],
     );
     assert_eq!(event.operation_type, EvalOperationType::IngestionPdf);
     assert_eq!(event.question, "document.pdf");
@@ -135,6 +136,7 @@ fn given_new_ingestion_mp4_constructor_when_creating_eval_event_then_operation_t
         15,
         "test/model",
         None,
+        vec![],
     );
     assert_eq!(event.operation_type, EvalOperationType::IngestionMp4);
     assert_eq!(event.generated_answer, "15");
@@ -148,6 +150,7 @@ fn given_ingestion_event_with_zero_chunks_when_checking_answer_then_chunk_count_
         0,
         "test/model",
         None,
+        vec![],
     );
     let chunk_count: usize = event.generated_answer.parse().unwrap();
     assert_eq!(chunk_count, 0);

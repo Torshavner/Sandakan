@@ -6,8 +6,8 @@ use crate::application::ports::{
     TextSplitterError, VectorStore, VectorStoreError,
 };
 use crate::domain::{
-    ContentType, Document, DocumentId, DocumentMetadata, EvalEvent, EvalOperationType, Job,
-    JobStatus,
+    ContentType, Document, DocumentId, DocumentMetadata, EvalEvent, EvalOperationType, EvalSource,
+    Job, JobStatus,
 };
 
 pub struct IngestionService<F, V>
@@ -90,7 +90,9 @@ where
             .await
             .map_err(IngestionError::Repository)?;
 
-        let result: Result<DocumentId, IngestionError> = async {
+        const MAX_EVAL_CHUNK_SAMPLES: usize = 5;
+
+        let result: Result<(DocumentId, Vec<EvalSource>), IngestionError> = async {
             let text = self
                 .file_loader
                 .extract_text(data, &document)
@@ -110,8 +112,18 @@ where
                 .map_err(IngestionError::Splitting)?;
 
             if chunks.is_empty() {
-                return Ok(doc_id);
+                return Ok((doc_id, vec![]));
             }
+
+            let chunk_samples: Vec<EvalSource> = chunks
+                .iter()
+                .take(MAX_EVAL_CHUNK_SAMPLES)
+                .map(|c| EvalSource {
+                    text: c.text.clone(),
+                    page: c.page,
+                    score: 0.0,
+                })
+                .collect();
 
             let contextual_strings: Vec<String> =
                 chunks.iter().map(|c| c.as_contextual_string()).collect();
@@ -147,20 +159,22 @@ where
                     .map_err(IngestionError::Storage)?;
             }
 
-            Ok(doc_id)
+            Ok((doc_id, chunk_samples))
         }
         .await;
 
         match &result {
-            Ok(_) => {
+            Ok((_, chunk_samples)) => {
                 self.job_repository
                     .update_status(job_id, JobStatus::Completed, None)
                     .await
                     .map_err(IngestionError::Repository)?;
-                // Chunk count is unknown at this point (we only returned doc_id), so derive
-                // from the fact that we succeeded: fire a best-effort eval event with count=1
-                // to indicate a non-empty ingestion. The IngestionWorker path has the real count.
-                self.fire_and_forget_eval(content_type, &eval_filename, 1);
+                self.fire_and_forget_eval(
+                    content_type,
+                    &eval_filename,
+                    chunk_samples.len(),
+                    chunk_samples.clone(),
+                );
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -171,10 +185,16 @@ where
             }
         }
 
-        result
+        result.map(|(doc_id, _)| doc_id)
     }
 
-    fn fire_and_forget_eval(&self, content_type: ContentType, filename: &str, chunk_count: usize) {
+    fn fire_and_forget_eval(
+        &self,
+        content_type: ContentType,
+        filename: &str,
+        chunk_count: usize,
+        chunk_samples: Vec<EvalSource>,
+    ) {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
@@ -183,8 +203,14 @@ where
                 ContentType::Pdf => EvalOperationType::IngestionPdf,
                 ContentType::Text => EvalOperationType::Query,
             };
-            let event =
-                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config, None);
+            let event = EvalEvent::new_ingestion(
+                op_type,
+                filename,
+                chunk_count,
+                &self.model_config,
+                None,
+                chunk_samples,
+            );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             tokio::spawn(async move {

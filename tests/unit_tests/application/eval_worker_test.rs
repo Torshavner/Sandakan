@@ -138,6 +138,40 @@ fn ingestion_eval_event(id: EvalEventId, chunk_count: usize) -> EvalEvent {
     }
 }
 
+fn ingestion_eval_event_with_samples(
+    id: EvalEventId,
+    chunk_count: usize,
+    operation_type: EvalOperationType,
+) -> EvalEvent {
+    EvalEvent {
+        id,
+        timestamp: chrono::Utc::now(),
+        question: "document.pdf".to_string(),
+        generated_answer: chunk_count.to_string(),
+        retrieved_sources: vec![
+            EvalSource {
+                text: "This is the first chunk of well-formed text.".to_string(),
+                page: Some(1),
+                score: 0.0,
+            },
+            EvalSource {
+                text: "This is the second chunk discussing another topic.".to_string(),
+                page: Some(1),
+                score: 0.0,
+            },
+            EvalSource {
+                text: "A third chunk covers the conclusion of the document.".to_string(),
+                page: Some(2),
+                score: 0.0,
+            },
+        ],
+        model_config: "test/model".to_string(),
+        operation_type,
+        correlation_id: None,
+        agentic_trace: None,
+    }
+}
+
 fn agentic_eval_event(id: EvalEventId) -> EvalEvent {
     EvalEvent {
         id,
@@ -740,4 +774,95 @@ async fn given_agentic_run_with_empty_tool_calls_when_worker_processes_then_cont
     assert!(saved[0].context_precision.is_none());
     // below_threshold is false because faithfulness (0.95) > threshold (0.7).
     assert!(!saved[0].below_threshold);
+}
+
+#[tokio::test]
+async fn given_ingestion_pdf_with_chunk_samples_when_worker_processes_then_llm_judge_called_and_quality_scored()
+ {
+    let event_id = EvalEventId::new();
+    let event = ingestion_eval_event_with_samples(event_id, 12, EvalOperationType::IngestionPdf);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    assert_eq!(outbox.failed_count().await, 0);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
+    assert!(!saved[0].eval_description.is_empty());
+    assert!(!saved[0].below_threshold);
+}
+
+#[tokio::test]
+async fn given_ingestion_pdf_with_chunk_samples_when_judge_fails_then_outbox_marked_failed() {
+    let event_id = EvalEventId::new();
+    let event = ingestion_eval_event_with_samples(event_id, 12, EvalOperationType::IngestionPdf);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    // InvalidScoreJudge returns non-numeric text, causing chunk quality parsing to fail.
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(InvalidScoreJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 0);
+    assert_eq!(outbox.failed_count().await, 1);
+    assert_eq!(result_repo.save_count().await, 0);
+}
+
+#[tokio::test]
+async fn given_ingestion_mp4_with_chunk_samples_when_worker_processes_then_quality_scored() {
+    let event_id = EvalEventId::new();
+    let event = ingestion_eval_event_with_samples(event_id, 8, EvalOperationType::IngestionMp4);
+    let entry = EvalOutboxEntry::new(event_id);
+
+    let outbox = Arc::new(TrackingOutboxRepository::with_entries(vec![entry]));
+    let event_repo = Arc::new(SingleEventRepository { event });
+    let result_repo = Arc::new(TrackingResultRepository::new());
+
+    let worker = EvalWorker::new(
+        outbox.clone() as Arc<dyn EvalOutboxRepository>,
+        event_repo as Arc<dyn EvalEventRepository>,
+        result_repo.clone() as Arc<dyn EvalResultRepository>,
+        Arc::new(HighFaithfulnessJudge) as Arc<dyn LlmClient>,
+        0.7,
+        Duration::from_secs(60),
+        10,
+    );
+
+    let processed = worker.process_batch().await.expect("should process batch");
+
+    assert_eq!(processed, 1);
+    assert_eq!(outbox.done_count().await, 1);
+    let saved = result_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert!((saved[0].faithfulness - 0.95).abs() < 0.001);
 }

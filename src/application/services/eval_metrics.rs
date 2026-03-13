@@ -215,6 +215,43 @@ pub async fn compute_context_precision(
     })
 }
 
+/// Chunk quality via LLM-as-judge for ingestion events.
+/// The judge evaluates a sample of chunks for coherence, segmentation, readability,
+/// and information density. Returns a score in `0.0..=1.0`.
+pub async fn compute_chunk_quality(
+    judge: &dyn LlmClient,
+    filename: &str,
+    content_type: &str,
+    chunk_samples: &[EvalSource],
+) -> Result<f32, LlmClientError> {
+    if chunk_samples.is_empty() {
+        tracing::debug!("judge.chunk_quality skipped: no chunk samples");
+        return Ok(0.0);
+    }
+    let prompt = build_chunk_quality_prompt(filename, content_type, chunk_samples);
+    tracing::debug!(
+        filename,
+        content_type,
+        sample_count = chunk_samples.len(),
+        "judge.chunk_quality calling LLM"
+    );
+    let raw = judge
+        .complete(&prompt, "")
+        .instrument(tracing::debug_span!("judge.chunk_quality"))
+        .await?;
+    tracing::debug!(raw_response = %raw.trim(), "judge.chunk_quality raw response");
+    let score = parse_faithfulness_score(&raw);
+    if score.is_some() && raw.trim().parse::<f32>().is_err() {
+        tracing::warn!(raw_response = %raw.trim(), "judge.chunk_quality: extracted score from noisy response");
+    }
+    score.ok_or_else(|| {
+        LlmClientError::InvalidResponse(format!(
+            "judge returned non-numeric chunk quality score: '{}'",
+            raw.trim()
+        ))
+    })
+}
+
 fn build_answer_relevancy_prompt(question: &str, generated_answer: &str) -> String {
     format!(
         "You are a strict relevancy evaluator.\n\
@@ -255,6 +292,50 @@ fn build_context_precision_prompt(question: &str, sources: &[EvalSource]) -> Str
          Score:",
         question = question,
         chunks = chunks
+    )
+}
+
+fn build_chunk_quality_prompt(
+    filename: &str,
+    content_type: &str,
+    chunk_samples: &[EvalSource],
+) -> String {
+    let chunks = chunk_samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let page_info = s.page.map(|p| format!(" (page {p})")).unwrap_or_default();
+            format!("Chunk {}{page_info}:\n{}", i + 1, s.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        "You are a document ingestion quality evaluator.\n\
+         A document \"{filename}\" (type: {content_type}) was split into chunks.\n\
+         Below are {n} sample chunks. Evaluate the overall chunk quality.\n\n\
+         CHUNK SAMPLES:\n{chunks}\n\n\
+         Evaluate these dimensions:\n\
+         - COHERENCE: Does each chunk contain complete, self-contained thoughts? \
+           Or are sentences cut mid-way?\n\
+         - SEGMENTATION: Are chunk boundaries at natural break points \
+           (paragraphs, sections)?\n\
+         - READABILITY: Is the text clean and well-formed? Or does it contain \
+           garbled characters, OCR artifacts, or encoding issues?\n\
+         - INFORMATION DENSITY: Do chunks contain meaningful content, \
+           not just headers/footers/boilerplate?\n\n\
+         Instructions:\n\
+         - Score 1.0 if all chunks are coherent, well-segmented, readable, \
+           and information-dense.\n\
+         - Score 0.0 if chunks are garbled, incoherent, or mostly empty/boilerplate.\n\
+         - Use intermediate values for partial quality.\n\
+         - Reply with ONLY a single decimal number between 0.0 and 1.0. \
+           No explanation. No other text.\n\n\
+         Score:",
+        filename = filename,
+        content_type = content_type,
+        n = chunk_samples.len(),
+        chunks = chunks,
     )
 }
 

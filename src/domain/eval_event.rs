@@ -148,20 +148,22 @@ impl EvalEvent {
     /// Ingestion pipeline event — used by `IngestionWorker`.
     ///
     /// `description` is the file name; `generated_answer` encodes `chunk_count`
-    /// so the worker can score structural validity without an LLM call.
+    /// so the worker can score chunk quality via LLM judge.
+    /// `chunk_samples` holds a small sample of chunk texts for the judge to evaluate.
     pub fn new_ingestion(
         operation_type: EvalOperationType,
         description: &str,
         chunk_count: usize,
         model_config: &str,
         correlation_id: Option<String>,
+        chunk_samples: Vec<EvalSource>,
     ) -> Self {
         Self {
             id: EvalEventId::new(),
             timestamp: Utc::now(),
             question: description.to_string(),
             generated_answer: chunk_count.to_string(),
-            retrieved_sources: vec![],
+            retrieved_sources: chunk_samples,
             model_config: model_config.to_string(),
             operation_type,
             correlation_id,

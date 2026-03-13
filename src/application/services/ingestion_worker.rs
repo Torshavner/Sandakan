@@ -8,8 +8,8 @@ use crate::application::ports::{
     StagingStore, TextSplitter, TranscriptionEngine, VectorStore,
 };
 use crate::domain::{
-    ContentType, Document, DocumentMetadata, EvalEvent, EvalOperationType, JobId, JobStatus,
-    StoragePath,
+    ContentType, Document, DocumentMetadata, EvalEvent, EvalOperationType, EvalSource, JobId,
+    JobStatus, StoragePath,
 };
 
 pub struct IngestionMessage {
@@ -102,6 +102,8 @@ where
         tracing::info!("Ingestion worker stopped: channel closed");
     }
 
+    const MAX_EVAL_CHUNK_SAMPLES: usize = 5;
+
     async fn process_job(&self, msg: IngestionMessage) -> Result<(), IngestionWorkerError> {
         let job_id = msg.job_id;
         let doc_id = msg.document.id;
@@ -116,7 +118,7 @@ where
             .await;
 
         match &result {
-            Ok(chunk_count) => {
+            Ok((chunk_count, chunk_samples)) => {
                 if msg.delete_after_processing {
                     if let Err(e) = self.staging_store.delete(&msg.storage_path).await {
                         tracing::warn!(
@@ -129,7 +131,12 @@ where
                 self.update_status(job_id, JobStatus::Completed, None)
                     .await?;
                 tracing::info!(document_id = %doc_id.as_uuid(), "Ingestion completed");
-                self.fire_and_forget_eval(content_type, &filename, *chunk_count);
+                self.fire_and_forget_eval(
+                    content_type,
+                    &filename,
+                    *chunk_count,
+                    chunk_samples.clone(),
+                );
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -150,7 +157,13 @@ where
         result.map(|_| ())
     }
 
-    fn fire_and_forget_eval(&self, content_type: ContentType, filename: &str, chunk_count: usize) {
+    fn fire_and_forget_eval(
+        &self,
+        content_type: ContentType,
+        filename: &str,
+        chunk_count: usize,
+        chunk_samples: Vec<EvalSource>,
+    ) {
         if let (Some(event_repo), Some(outbox_repo)) =
             (&self.eval_event_repository, &self.eval_outbox_repository)
         {
@@ -160,8 +173,14 @@ where
                 // Text ingestion treated as a query-type event — no distinct scoring path needed.
                 ContentType::Text => EvalOperationType::Query,
             };
-            let event =
-                EvalEvent::new_ingestion(op_type, filename, chunk_count, &self.model_config, None);
+            let event = EvalEvent::new_ingestion(
+                op_type,
+                filename,
+                chunk_count,
+                &self.model_config,
+                None,
+                chunk_samples,
+            );
             let event_repo = Arc::clone(event_repo);
             let outbox_repo = Arc::clone(outbox_repo);
             let span = tracing::Span::current();
@@ -187,7 +206,7 @@ where
         document: &Document,
         storage_path: &StoragePath,
         content_type: ContentType,
-    ) -> Result<usize, IngestionWorkerError> {
+    ) -> Result<(usize, Vec<EvalSource>), IngestionWorkerError> {
         let doc_id = document.id;
 
         let data = self
@@ -258,8 +277,18 @@ where
         };
 
         if chunks.is_empty() {
-            return Ok(0);
+            return Ok((0, vec![]));
         }
+
+        let chunk_samples: Vec<EvalSource> = chunks
+            .iter()
+            .take(Self::MAX_EVAL_CHUNK_SAMPLES)
+            .map(|c| EvalSource {
+                text: c.text.clone(),
+                page: c.page,
+                score: 0.0,
+            })
+            .collect();
 
         let contextual_strings: Vec<String> =
             chunks.iter().map(|c| c.as_contextual_string()).collect();
@@ -287,7 +316,7 @@ where
                 .map_err(IngestionWorkerError::VectorStore)?;
         }
 
-        Ok(chunks.len())
+        Ok((chunks.len(), chunk_samples))
     }
 
     async fn update_status(

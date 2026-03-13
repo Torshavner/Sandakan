@@ -2,8 +2,9 @@ use sandakan::application::ports::{
     AgentMessage, Embedder, EmbedderError, LlmClient, LlmClientError, LlmToolResponse, ToolSchema,
 };
 use sandakan::application::services::eval_metrics::{
-    compute_agentic_faithfulness, compute_answer_relevancy, compute_context_precision,
-    compute_context_recall, compute_correctness, compute_faithfulness, generate_eval_description,
+    compute_agentic_faithfulness, compute_answer_relevancy, compute_chunk_quality,
+    compute_context_precision, compute_context_recall, compute_correctness, compute_faithfulness,
+    generate_eval_description,
 };
 use sandakan::domain::{Embedding, EvalSource, ToolCallTrace};
 
@@ -335,4 +336,54 @@ async fn given_valid_scores_when_generating_eval_description_then_returns_non_em
     .await
     .unwrap();
     assert!(!description.is_empty());
+}
+
+// -- Chunk Quality ------------------------------------------------------------
+
+#[tokio::test]
+async fn given_judge_returns_valid_score_when_compute_chunk_quality_called_then_score_parsed() {
+    let judge = MockJudge {
+        response: "0.85".to_string(),
+    };
+    let samples = vec![
+        EvalSource {
+            text: "Well-formed first chunk.".to_string(),
+            page: Some(1),
+            score: 0.0,
+        },
+        EvalSource {
+            text: "Well-formed second chunk.".to_string(),
+            page: Some(2),
+            score: 0.0,
+        },
+    ];
+    let score = compute_chunk_quality(&judge, "report.pdf", "ingestion_pdf", &samples)
+        .await
+        .unwrap();
+    assert!((score - 0.85).abs() < 0.001);
+}
+
+#[tokio::test]
+async fn given_judge_returns_non_numeric_when_compute_chunk_quality_called_then_returns_error() {
+    let judge = MockJudge {
+        response: "I cannot evaluate this.".to_string(),
+    };
+    let samples = vec![EvalSource {
+        text: "Some chunk text.".to_string(),
+        page: None,
+        score: 0.0,
+    }];
+    let result = compute_chunk_quality(&judge, "doc.pdf", "ingestion_pdf", &samples).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn given_empty_chunks_when_compute_chunk_quality_called_then_returns_zero() {
+    let judge = MockJudge {
+        response: "should not be called".to_string(),
+    };
+    let score = compute_chunk_quality(&judge, "empty.pdf", "ingestion_pdf", &[])
+        .await
+        .unwrap();
+    assert!((score - 0.0).abs() < 0.001);
 }
